@@ -38,7 +38,7 @@ export function shipmentDto(row: ShipmentRow, user: AuthUser) {
     createdAt: row.created_at,
     ...(user.role !== "driver" && {
       failedAttempts: row.failed_attempts,
-      locked: row.locked === 1,
+      locked: row.locked,
     }),
     ...(user.role === "coordinator" && {
       declinedBy: row.declined_by_name ?? undefined,

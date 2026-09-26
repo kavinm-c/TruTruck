@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
-import { db, type DriverRow } from "../db.js";
+import { maybe, must, supabase, type DriverRow } from "../db.js";
 import { HttpError } from "../errors.js";
 import { signToken } from "../auth.js";
 
@@ -16,10 +16,8 @@ authRouter.use((_req, _res, next) => {
   next();
 });
 
-authRouter.get("/demo-users", (_req, res) => {
-  const drivers = db
-    .prepare("SELECT id, name FROM drivers ORDER BY name")
-    .all() as unknown as Pick<DriverRow, "id" | "name">[];
+authRouter.get("/demo-users", async (_req, res) => {
+  const drivers = must(await supabase.from("drivers").select("id, name").order("name")) as Pick<DriverRow, "id" | "name">[];
   res.json({ roles: ["coordinator", "driver", "clerk"], drivers });
 });
 
@@ -29,10 +27,10 @@ const loginSchema = z.discriminatedUnion("role", [
   z.object({ role: z.literal("driver"), driverId: z.string().min(1) }),
 ]);
 
-authRouter.post("/demo-login", (req, res) => {
+authRouter.post("/demo-login", async (req, res) => {
   const body = loginSchema.parse(req.body);
   if (body.role === "driver") {
-    const exists = db.prepare("SELECT 1 FROM drivers WHERE id = ?").get(body.driverId);
+    const exists = maybe(await supabase.from("drivers").select("id").eq("id", body.driverId).maybeSingle());
     if (!exists) throw new HttpError(404, "Unknown driver");
     res.json({ token: signToken({ role: "driver", driverId: body.driverId }), user: body });
     return;

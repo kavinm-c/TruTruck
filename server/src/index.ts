@@ -11,7 +11,7 @@ import { shipmentsRouter } from "./routes/shipments.js";
 import { driversRouter } from "./routes/drivers.js";
 import { auditRouter } from "./routes/audit.js";
 
-seed(); // creates tables; loads demo data only if the DB is empty
+await seed(); // creates tables; loads demo data only if the DB is empty
 
 const app = express();
 app.use(helmet());
@@ -33,6 +33,8 @@ app.use((_req, res) => {
 });
 app.use(errorHandler);
 
-app.listen(config.port, () => {
+// Express 5 passes listen errors (e.g. port already in use) to this callback.
+app.listen(config.port, (err?: Error) => {
+  if (err) throw err;
   console.log(`TruTruck API listening on http://localhost:${config.port}/api`);
 });
