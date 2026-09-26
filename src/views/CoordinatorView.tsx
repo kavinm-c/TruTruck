@@ -244,13 +244,12 @@ export function CoordinatorView() {
                     <TableHead>Order</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Driver</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visibleShipments.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                      <TableCell colSpan={3} className="py-8 text-center text-muted-foreground">
                         No {statusFilter === "all" ? "" : `${SHIPMENT_STATUS_LABEL[statusFilter].toLowerCase()} `}
                         orders.
                       </TableCell>
@@ -281,7 +280,12 @@ export function CoordinatorView() {
                         <TableCell>
                           <StatusBadge status={shipment.status} />
                           {shipment.locked && (
-                            <div className="mt-1 text-xs font-medium text-destructive">Pass locked</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-destructive">Pass locked</span>
+                              <Button size="xs" variant="destructive" onClick={() => handleReissue(shipment)}>
+                                Reissue pass
+                              </Button>
+                            </div>
                           )}
                           {shipment.status === "verified" && (
                             <div className="mt-1 flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
@@ -310,45 +314,42 @@ export function CoordinatorView() {
                           )}
                         </TableCell>
                         <TableCell className="text-xs">
-                          {driver ? (
-                            <div className="flex items-center gap-2">
-                              <DriverAvatar photo={driver.photo} name={driver.name} className="size-7 rounded-md" />
-                              <div>
-                                <div className="font-medium text-foreground">{driver.name}</div>
-                                <div className="text-muted-foreground">{shipment.carrierName}</div>
+                          <div className="flex items-center justify-between gap-3">
+                            {driver ? (
+                              <div className="flex items-center gap-2">
+                                <DriverAvatar photo={driver.photo} name={driver.name} className="size-7 rounded-md" />
+                                <div>
+                                  <div className="font-medium text-foreground">{driver.name}</div>
+                                  <div className="text-muted-foreground">{shipment.carrierName}</div>
+                                </div>
                               </div>
+                            ) : canAssign ? (
+                              <Button size="sm" onClick={() => openAssignDialog(shipment)}>
+                                Assign driver
+                              </Button>
+                            ) : (
+                              <span className="text-muted-foreground">Unassigned</span>
+                            )}
+
+                            <div className="flex shrink-0 items-center gap-1">
+                              {driver && canAssign && (
+                                <Button size="xs" variant="outline" onClick={() => openAssignDialog(shipment)}>
+                                  Reassign
+                                </Button>
+                              )}
+                              {canRevoke && (
+                                <Button
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                  title="Revoke order"
+                                  aria-label={`Revoke ${shipment.referenceCode}`}
+                                  onClick={() => openRevokeDialog(shipment)}
+                                >
+                                  <Ban />
+                                </Button>
+                              )}
                             </div>
-                          ) : (
-                            <span className="text-muted-foreground">Unassigned</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            {shipment.locked && (
-                              <Button size="sm" variant="destructive" onClick={() => handleReissue(shipment)}>
-                                Reissue pass
-                              </Button>
-                            )}
-                            {canAssign && (
-                              <Button
-                                size="sm"
-                                variant={driver ? "outline" : "default"}
-                                onClick={() => openAssignDialog(shipment)}
-                              >
-                                {driver ? "Reassign" : "Assign driver"}
-                              </Button>
-                            )}
-                            {canRevoke && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                onClick={() => openRevokeDialog(shipment)}
-                              >
-                                <Ban className="size-3.5" />
-                                Revoke
-                              </Button>
-                            )}
                           </div>
                         </TableCell>
                       </TableRow>
