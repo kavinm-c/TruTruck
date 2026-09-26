@@ -323,7 +323,7 @@ export function CoordinatorView() {
                 })}
               </div>
 
-              <Table>
+              <Table className="text-base">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Order</TableHead>
@@ -346,12 +346,12 @@ export function CoordinatorView() {
                     return (
                       <TableRow key={shipment.id}>
                         <TableCell>
-                          <div className="text-base font-medium">{shipment.referenceCode}</div>
+                          <div className="text-lg font-medium">{shipment.referenceCode}</div>
                           <div className="max-w-56 truncate text-muted-foreground">
                             {shipment.cargo || "—"}
                           </div>
                           <Button
-                            size="xs"
+                            size="sm"
                             variant="outline"
                             className="mt-1.5"
                             aria-label={`Pickup and drop-off details for ${shipment.referenceCode}`}
@@ -362,17 +362,17 @@ export function CoordinatorView() {
                           </Button>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={shipment.status} />
+                          <StatusBadge status={shipment.status} className="h-6 px-2.5 text-sm [&>svg]:size-3.5!" />
                           {shipment.locked && (
                             <div className="mt-1 flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium text-destructive">Pass locked</span>
+                              <span className="text-base font-medium text-destructive">Pass locked</span>
                               <Button size="xs" variant="destructive" onClick={() => handleReissue(shipment)}>
                                 Reissue pass
                               </Button>
                             </div>
                           )}
                           {shipment.status === "verified" && (
-                            <div className="mt-1 flex items-center gap-1 text-sm text-emerald-700 dark:text-emerald-400">
+                            <div className="mt-1 flex items-center gap-1 text-base text-emerald-700 dark:text-emerald-400">
                               <CircleCheck className="size-4 shrink-0" />
                               Verified by receiving clerk
                               {shipment.dockNumber && ` · ${shipment.dockNumber}`}
@@ -380,19 +380,19 @@ export function CoordinatorView() {
                             </div>
                           )}
                           {shipment.status === "in_transit" && shipment.verifiedAt && (
-                            <div className="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+                            <div className="mt-1 flex items-center gap-1 text-base text-muted-foreground">
                               <CircleCheck className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                               Clerk verified {formatStamp(shipment.verifiedAt)}
                             </div>
                           )}
                           {shipment.status === "cancelled" && (
-                            <div className="mt-1 max-w-56 text-sm text-muted-foreground">
+                            <div className="mt-1 max-w-56 text-base text-muted-foreground">
                               Revoked{shipment.cancelledAt && ` ${formatStamp(shipment.cancelledAt)}`}
                               {shipment.cancelReason && ` · ${shipment.cancelReason}`}
                             </div>
                           )}
                           {shipment.status === "unassigned" && shipment.declinedBy && (
-                            <div className="mt-1 text-sm text-amber-700 dark:text-amber-400">
+                            <div className="mt-1 text-base text-amber-700 dark:text-amber-400">
                               Declined by {shipment.declinedBy}
                             </div>
                           )}
@@ -408,7 +408,7 @@ export function CoordinatorView() {
                                 </div>
                               </div>
                             ) : canAssign ? (
-                              <Button size="sm" onClick={() => openAssignDialog(shipment)}>
+                              <Button onClick={() => openAssignDialog(shipment)}>
                                 Assign driver
                               </Button>
                             ) : (
