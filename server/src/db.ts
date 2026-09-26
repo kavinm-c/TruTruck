@@ -1,37 +1,18 @@
-import { DatabaseSync } from "node:sqlite";
+import postgres from "postgres";
 import { config } from "./config.js";
 
-// Built-in SQLite (Node 22.13+): no native module to compile.
-export const db = new DatabaseSync(config.dbPath);
-db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+// Supabase Postgres. The transaction pooler (port 6543) doesn't support prepared statements.
+export const sql = postgres(config.databaseUrl, {
+  ssl: "require",
+  prepare: new URL(config.databaseUrl).port !== "6543",
+  onnotice: () => {},
+});
 
-// Bump when the schema changes. Older demo databases are dropped and re-seeded.
-const SCHEMA_VERSION = 2;
+/** A pooled connection or an open transaction; both run the same queries. */
+export type Sql = postgres.Sql | postgres.TransactionSql;
 
-/** Run fn inside a transaction; rolls back on error. */
-export function transaction(fn: () => void) {
-  db.exec("BEGIN");
-  try {
-    fn();
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-}
-
-export function migrate() {
-  const { user_version } = db.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (user_version !== SCHEMA_VERSION) {
-    db.exec(`
-      DROP TABLE IF EXISTS audit_log;
-      DROP TABLE IF EXISTS shipments;
-      DROP TABLE IF EXISTS drivers;
-      DROP TABLE IF EXISTS carriers;
-    `);
-  }
-
-  db.exec(`
+export async function migrate() {
+  await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS carriers (
       id           TEXT PRIMARY KEY,
       name         TEXT NOT NULL,
@@ -44,14 +25,16 @@ export function migrate() {
       id                  TEXT PRIMARY KEY,
       name                TEXT NOT NULL,
       phone               TEXT NOT NULL,
-      email               TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      email               TEXT NOT NULL,
       photo               TEXT,
       carrier_id          TEXT NOT NULL REFERENCES carriers(id),
-      license_number      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      license_number      TEXT NOT NULL,
       vehicle_plate       TEXT NOT NULL,
       vehicle_description TEXT NOT NULL DEFAULT '',
-      created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS drivers_email_key ON drivers (lower(email));
+    CREATE UNIQUE INDEX IF NOT EXISTS drivers_license_number_key ON drivers (lower(license_number));
 
     CREATE TABLE IF NOT EXISTS shipments (
       id                 TEXT PRIMARY KEY,
@@ -68,33 +51,35 @@ export function migrate() {
       totp_secret        TEXT,
       last_totp_step     INTEGER,
       failed_attempts    INTEGER NOT NULL DEFAULT 0,
-      locked             INTEGER NOT NULL DEFAULT 0,
+      locked             BOOLEAN NOT NULL DEFAULT false,
       declined_by        TEXT REFERENCES drivers(id),
       dock_number        TEXT,
-      accepted_at        TEXT,
-      arrived_at         TEXT,
-      verified_at        TEXT,
-      released_at        TEXT,
+      accepted_at        TIMESTAMPTZ,
+      arrived_at         TIMESTAMPTZ,
+      verified_at        TIMESTAMPTZ,
+      released_at        TIMESTAMPTZ,
       verification_notes TEXT,
-      created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS audit_log (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       shipment_id TEXT REFERENCES shipments(id),
       actor_role  TEXT NOT NULL,
       actor_id    TEXT,
       event       TEXT NOT NULL,
-      detail      TEXT,
-      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      detail      JSONB,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    PRAGMA user_version = ${SCHEMA_VERSION};
+    -- Only this API talks to the database. RLS with no policies keeps Supabase's
+    -- public REST API (anon/authenticated keys) from reading pass secrets.
+    ALTER TABLE carriers  ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE drivers   ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE shipments ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
   `);
 }
-
-// Run immediately so modules can prepare statements at import time.
-migrate();
 
 export interface CarrierRow {
   id: string;
@@ -114,7 +99,7 @@ export interface DriverRow {
   license_number: string;
   vehicle_plate: string;
   vehicle_description: string;
-  created_at: string;
+  created_at: Date;
 }
 
 export interface ShipmentRow {
@@ -131,15 +116,15 @@ export interface ShipmentRow {
   totp_secret: string | null;
   last_totp_step: number | null;
   failed_attempts: number;
-  locked: number;
+  locked: boolean;
   declined_by: string | null;
   dock_number: string | null;
-  accepted_at: string | null;
-  arrived_at: string | null;
-  verified_at: string | null;
-  released_at: string | null;
+  accepted_at: Date | null;
+  arrived_at: Date | null;
+  verified_at: Date | null;
+  released_at: Date | null;
   verification_notes: string | null;
-  created_at: string;
+  created_at: Date;
   // Joined for display.
   driver_name: string | null;
   carrier_name: string | null;
@@ -147,12 +132,12 @@ export interface ShipmentRow {
 }
 
 /** Shipment columns plus driver/carrier names; append WHERE/ORDER BY. */
-export const SHIPMENT_SELECT = `
-  SELECT s.*, dr.name AS driver_name, c.name AS carrier_name, dec.name AS declined_by_name
+export const SHIPMENT_SELECT = sql`
+  SELECT s.*, dr.name AS driver_name, c.name AS carrier_name, decl.name AS declined_by_name
   FROM shipments s
   LEFT JOIN drivers dr ON dr.id = s.driver_id
   LEFT JOIN carriers c ON c.id = s.carrier_id
-  LEFT JOIN drivers dec ON dec.id = s.declined_by`;
+  LEFT JOIN drivers decl ON decl.id = s.declined_by`;
 
 export type ShipmentStatus =
   | "unassigned"

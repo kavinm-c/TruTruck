@@ -11,7 +11,7 @@ import { shipmentsRouter } from "./routes/shipments.js";
 import { driversRouter } from "./routes/drivers.js";
 import { auditRouter } from "./routes/audit.js";
 
-seed(); // creates tables; loads demo data only if the DB is empty
+await seed(); // creates tables; loads demo data only if the DB is empty
 
 const app = express();
 app.use(helmet());

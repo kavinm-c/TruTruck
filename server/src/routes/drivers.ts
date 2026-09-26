@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { db, type DriverRow } from "../db.js";
+import { sql, type DriverRow } from "../db.js";
 import { driverDto } from "../dto.js";
 import { HttpError } from "../errors.js";
 import { audit } from "../audit.js";
@@ -14,13 +14,12 @@ driversRouter.use(requireAuth);
  * Coordinators see every driver. Drivers only see themselves. Clerks get no
  * list at all: they only see a driver's details after scanning a valid pass.
  */
-driversRouter.get("/", requireRole("coordinator", "driver"), (req, res) => {
+driversRouter.get("/", requireRole("coordinator", "driver"), async (req, res) => {
   const user = currentUser(req);
-  const rows = (
+  const rows =
     user.role === "driver"
-      ? db.prepare("SELECT * FROM drivers WHERE id = ?").all(user.driverId ?? "")
-      : db.prepare("SELECT * FROM drivers ORDER BY name").all()
-  ) as unknown as DriverRow[];
+      ? await sql<DriverRow[]>`SELECT * FROM drivers WHERE id = ${user.driverId ?? ""}`
+      : await sql<DriverRow[]>`SELECT * FROM drivers ORDER BY name`;
   res.json(rows.map(driverDto));
 });
 
@@ -41,20 +40,17 @@ const driverSchema = z.object({
   photo: photoSchema,
 });
 
-function assertCarrier(carrierId: string) {
-  if (!db.prepare("SELECT 1 FROM carriers WHERE id = ?").get(carrierId)) {
-    throw new HttpError(404, "Carrier not found");
-  }
+async function assertCarrier(carrierId: string) {
+  const [found] = await sql`SELECT 1 FROM carriers WHERE id = ${carrierId}`;
+  if (!found) throw new HttpError(404, "Carrier not found");
 }
 
 /** Email and licence number identify a driver, so they must be unique. */
-function assertUnique(email: string, licenseNumber: string, exceptId = "") {
-  const clash = db
-    .prepare(
-      `SELECT email, license_number FROM drivers
-       WHERE id != ? AND (email = ? COLLATE NOCASE OR license_number = ? COLLATE NOCASE)`,
-    )
-    .get(exceptId, email, licenseNumber) as unknown as Pick<DriverRow, "email" | "license_number"> | undefined;
+async function assertUnique(email: string, licenseNumber: string, exceptId = "") {
+  const [clash] = await sql<Pick<DriverRow, "email" | "license_number">[]>`
+    SELECT email, license_number FROM drivers
+    WHERE id != ${exceptId}
+      AND (lower(email) = lower(${email}) OR lower(license_number) = lower(${licenseNumber}))`;
   if (!clash) return;
   throw new HttpError(
     409,
@@ -64,49 +60,49 @@ function assertUnique(email: string, licenseNumber: string, exceptId = "") {
   );
 }
 
-function getDriver(id: string): DriverRow {
-  const row = db.prepare("SELECT * FROM drivers WHERE id = ?").get(id) as unknown as DriverRow | undefined;
+async function getDriver(id: string): Promise<DriverRow> {
+  const [row] = await sql<DriverRow[]>`SELECT * FROM drivers WHERE id = ${id}`;
   if (!row) throw new HttpError(404, "Driver not found");
   return row;
 }
 
-driversRouter.post("/", requireRole("coordinator"), (req, res) => {
+driversRouter.post("/", requireRole("coordinator"), async (req, res) => {
   const user = currentUser(req);
   const body = driverSchema.parse(req.body);
-  assertCarrier(body.carrierId);
-  assertUnique(body.email, body.licenseNumber);
+  await assertCarrier(body.carrierId);
+  await assertUnique(body.email, body.licenseNumber);
 
   const id = `drv-${randomUUID().slice(0, 8)}`;
-  db.prepare(
-    `INSERT INTO drivers (id, name, phone, email, photo, carrier_id, license_number, vehicle_plate, vehicle_description)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, body.name, body.phone, body.email, body.photo, body.carrierId, body.licenseNumber,
-    body.vehiclePlate, body.vehicleDescription);
+  await sql`
+    INSERT INTO drivers (id, name, phone, email, photo, carrier_id, license_number, vehicle_plate, vehicle_description)
+    VALUES (${id}, ${body.name}, ${body.phone}, ${body.email}, ${body.photo}, ${body.carrierId},
+      ${body.licenseNumber}, ${body.vehiclePlate}, ${body.vehicleDescription})`;
 
-  audit(null, user, "driver_added", { driverId: id, name: body.name });
-  res.status(201).json(driverDto(getDriver(id)));
+  await audit(null, user, "driver_added", { driverId: id, name: body.name });
+  res.status(201).json(driverDto(await getDriver(id)));
 });
 
 // Editing may omit the photo to keep the current one.
-driversRouter.put("/:id", requireRole("coordinator"), (req, res) => {
+driversRouter.put("/:id", requireRole("coordinator"), async (req, res) => {
   const user = currentUser(req);
-  const existing = getDriver(req.params.id as string);
+  const existing = await getDriver(req.params.id as string);
   const body = driverSchema.extend({ photo: photoSchema.optional() }).parse(req.body);
-  assertCarrier(body.carrierId);
-  assertUnique(body.email, body.licenseNumber, existing.id);
+  await assertCarrier(body.carrierId);
+  await assertUnique(body.email, body.licenseNumber, existing.id);
 
-  db.prepare(
-    `UPDATE drivers SET name = ?, phone = ?, email = ?, photo = ?, carrier_id = ?, license_number = ?,
-       vehicle_plate = ?, vehicle_description = ?
-     WHERE id = ?`,
-  ).run(body.name, body.phone, body.email, body.photo ?? existing.photo, body.carrierId, body.licenseNumber,
-    body.vehiclePlate, body.vehicleDescription, existing.id);
-  // Keep open orders pointing at the driver's current carrier.
-  db.prepare(
-    `UPDATE shipments SET carrier_id = ?
-     WHERE driver_id = ? AND status IN ('assigned','en_route','at_warehouse')`,
-  ).run(body.carrierId, existing.id);
+  await sql.begin(async (tx) => {
+    await tx`
+      UPDATE drivers SET name = ${body.name}, phone = ${body.phone}, email = ${body.email},
+        photo = ${body.photo ?? existing.photo}, carrier_id = ${body.carrierId},
+        license_number = ${body.licenseNumber}, vehicle_plate = ${body.vehiclePlate},
+        vehicle_description = ${body.vehicleDescription}
+      WHERE id = ${existing.id}`;
+    // Keep open orders pointing at the driver's current carrier.
+    await tx`
+      UPDATE shipments SET carrier_id = ${body.carrierId}
+      WHERE driver_id = ${existing.id} AND status IN ('assigned','en_route','at_warehouse')`;
+  });
 
-  audit(null, user, "driver_updated", { driverId: existing.id });
-  res.json(driverDto(getDriver(existing.id)));
+  await audit(null, user, "driver_updated", { driverId: existing.id });
+  res.json(driverDto(await getDriver(existing.id)));
 });

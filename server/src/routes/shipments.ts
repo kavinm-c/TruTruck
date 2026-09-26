@@ -4,9 +4,8 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { config } from "../config.js";
 import {
-  db,
+  sql,
   SHIPMENT_SELECT,
-  transaction,
   type CarrierRow,
   type ShipmentRow,
   type ShipmentStatus,
@@ -33,20 +32,25 @@ const verifyLimiter = rateLimit({
 
 // ---------- helpers ----------
 
-function getShipment(id: string): ShipmentRow {
-  const row = db.prepare(`${SHIPMENT_SELECT} WHERE s.id = ?`).get(id) as unknown as ShipmentRow | undefined;
+async function findShipment(id: string): Promise<ShipmentRow | undefined> {
+  const [row] = await sql<ShipmentRow[]>`${SHIPMENT_SELECT} WHERE s.id = ${id}`;
+  return row;
+}
+
+async function getShipment(id: string): Promise<ShipmentRow> {
+  const row = await findShipment(id);
   if (!row) throw new HttpError(404, "Shipment not found");
   return row;
 }
 
-function getDriver(id: string): DriverRow {
-  const row = db.prepare("SELECT * FROM drivers WHERE id = ?").get(id) as unknown as DriverRow | undefined;
+async function getDriver(id: string): Promise<DriverRow> {
+  const [row] = await sql<DriverRow[]>`SELECT * FROM drivers WHERE id = ${id}`;
   if (!row) throw new HttpError(404, "Driver not found");
   return row;
 }
 
-function getCarrier(id: string): CarrierRow {
-  const row = db.prepare("SELECT * FROM carriers WHERE id = ?").get(id) as unknown as CarrierRow | undefined;
+async function getCarrier(id: string): Promise<CarrierRow> {
+  const [row] = await sql<CarrierRow[]>`SELECT * FROM carriers WHERE id = ${id}`;
   if (!row) throw new HttpError(404, "Carrier not found");
   return row;
 }
@@ -62,42 +66,34 @@ function assertOwnShipment(row: ShipmentRow, user: AuthUser) {
 }
 
 /** Dispatch is blocked when the driver's carrier registration isn't active. */
-function dispatchableDriver(driverId: string, shipmentId: string | null, user: AuthUser) {
-  const driver = getDriver(driverId);
-  const carrier = getCarrier(driver.carrier_id);
+async function dispatchableDriver(driverId: string, shipmentId: string | null, user: AuthUser) {
+  const driver = await getDriver(driverId);
+  const carrier = await getCarrier(driver.carrier_id);
   if (carrier.cvor_status !== "active") {
-    audit(shipmentId, user, "assign_blocked_carrier", { driverId, carrierId: carrier.id, cvorStatus: carrier.cvor_status });
+    await audit(shipmentId, user, "assign_blocked_carrier", { driverId, carrierId: carrier.id, cvorStatus: carrier.cvor_status });
     throw new HttpError(422, `${carrier.name}'s CVOR registration is ${carrier.cvor_status}. Cannot dispatch ${driver.name}.`);
   }
   return { driver, carrier };
 }
 
-function respond(id: string, user: AuthUser) {
-  return shipmentDto(getShipment(id), user);
+async function respond(id: string, user: AuthUser) {
+  return shipmentDto(await getShipment(id), user);
 }
-
-const now = () => new Date().toISOString();
 
 // ---------- list ----------
 
-shipmentsRouter.get("/", (req, res) => {
+shipmentsRouter.get("/", async (req, res) => {
   const user = currentUser(req);
   let rows: ShipmentRow[];
   if (user.role === "driver") {
-    rows = db
-      .prepare(`${SHIPMENT_SELECT} WHERE s.driver_id = ? ORDER BY s.pickup_date, s.pickup_time`)
-      .all(user.driverId ?? "") as unknown as ShipmentRow[];
+    rows = await sql<ShipmentRow[]>`
+      ${SHIPMENT_SELECT} WHERE s.driver_id = ${user.driverId ?? ""} ORDER BY s.pickup_date, s.pickup_time`;
   } else if (user.role === "clerk") {
-    rows = db
-      .prepare(
-        `${SHIPMENT_SELECT} WHERE s.status IN ('at_warehouse','verified','in_transit')
-         ORDER BY COALESCE(s.verified_at, s.arrived_at) DESC`,
-      )
-      .all() as unknown as ShipmentRow[];
+    rows = await sql<ShipmentRow[]>`
+      ${SHIPMENT_SELECT} WHERE s.status IN ('at_warehouse','verified','in_transit')
+      ORDER BY COALESCE(s.verified_at, s.arrived_at) DESC`;
   } else {
-    rows = db
-      .prepare(`${SHIPMENT_SELECT} ORDER BY s.pickup_date, s.pickup_time, s.reference_code`)
-      .all() as unknown as ShipmentRow[];
+    rows = await sql<ShipmentRow[]>`${SHIPMENT_SELECT} ORDER BY s.pickup_date, s.pickup_time, s.reference_code`;
   }
   res.json(rows.map((r) => shipmentDto(r, user)));
 });
@@ -113,105 +109,100 @@ const orderSchema = z.object({
   driverId: z.string().min(1).optional(),
 });
 
-function nextReference(): { id: string; ref: string } {
-  const { n } = db
-    .prepare("SELECT MAX(CAST(substr(reference_code, 5) AS INTEGER)) AS n FROM shipments")
-    .get() as unknown as { n: number | null };
+async function nextReference(): Promise<{ id: string; ref: string }> {
+  const [{ n }] = await sql<{ n: number | null }[]>`
+    SELECT MAX(CAST(substr(reference_code, 5) AS INTEGER)) AS n FROM shipments`;
   const next = (n ?? 1000) + 1;
   return { id: `shp-${next}`, ref: `TRU-${next}` };
 }
 
 /** Create a delivery order. A pass secret is minted as soon as a driver is assigned. */
-shipmentsRouter.post("/", requireRole("coordinator"), (req, res) => {
+shipmentsRouter.post("/", requireRole("coordinator"), async (req, res) => {
   const user = currentUser(req);
   const body = orderSchema.parse(req.body);
   if (body.pickupLocation.toLowerCase() === body.dropoffLocation.toLowerCase()) {
     throw new HttpError(422, "Pickup and drop-off locations must be different.");
   }
-  const dispatch = body.driverId ? dispatchableDriver(body.driverId, null, user) : null;
+  const dispatch = body.driverId ? await dispatchableDriver(body.driverId, null, user) : null;
 
-  const { id, ref } = nextReference();
-  db.prepare(
-    `INSERT INTO shipments (id, reference_code, cargo, pickup_location, dropoff_location, pickup_date,
-       pickup_time, status, carrier_id, driver_id, totp_secret)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, ref, body.cargo, body.pickupLocation, body.dropoffLocation, body.pickupDate, body.pickupTime,
-    dispatch ? "assigned" : "unassigned", dispatch?.carrier.id ?? null, dispatch?.driver.id ?? null,
-    dispatch ? generateSecret() : null);
+  const { id, ref } = await nextReference();
+  await sql`
+    INSERT INTO shipments (id, reference_code, cargo, pickup_location, dropoff_location, pickup_date,
+      pickup_time, status, carrier_id, driver_id, totp_secret)
+    VALUES (${id}, ${ref}, ${body.cargo}, ${body.pickupLocation}, ${body.dropoffLocation}, ${body.pickupDate},
+      ${body.pickupTime}, ${dispatch ? "assigned" : "unassigned"}, ${dispatch?.carrier.id ?? null},
+      ${dispatch?.driver.id ?? null}, ${dispatch ? generateSecret() : null})`;
 
-  audit(id, user, "order_created", { driverId: dispatch?.driver.id ?? null });
-  res.status(201).json(respond(id, user));
+  await audit(id, user, "order_created", { driverId: dispatch?.driver.id ?? null });
+  res.status(201).json(await respond(id, user));
 });
 
 const assignSchema = z.object({ driverId: z.string().min(1) });
 
-shipmentsRouter.post("/:id/assign", requireRole("coordinator"), (req, res) => {
+shipmentsRouter.post("/:id/assign", requireRole("coordinator"), async (req, res) => {
   const user = currentUser(req);
   const { driverId } = assignSchema.parse(req.body);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
   assertStatus(row, ["unassigned", "assigned", "en_route"]);
-  const { driver, carrier } = dispatchableDriver(driverId, row.id, user);
+  const { driver, carrier } = await dispatchableDriver(driverId, row.id, user);
 
   // New driver means a brand-new pass secret; the old driver's pass stops working.
-  db.prepare(
-    `UPDATE shipments SET carrier_id = ?, driver_id = ?, status = 'assigned',
-       totp_secret = ?, last_totp_step = NULL, failed_attempts = 0, locked = 0,
-       declined_by = NULL, accepted_at = NULL, arrived_at = NULL
-     WHERE id = ?`,
-  ).run(carrier.id, driver.id, generateSecret(), row.id);
+  await sql`
+    UPDATE shipments SET carrier_id = ${carrier.id}, driver_id = ${driver.id}, status = 'assigned',
+      totp_secret = ${generateSecret()}, last_totp_step = NULL, failed_attempts = 0, locked = false,
+      declined_by = NULL, accepted_at = NULL, arrived_at = NULL
+    WHERE id = ${row.id}`;
 
-  audit(row.id, user, row.driver_id ? "reassigned" : "assigned", { driverId });
-  res.json(respond(row.id, user));
+  await audit(row.id, user, row.driver_id ? "reassigned" : "assigned", { driverId });
+  res.json(await respond(row.id, user));
 });
 
 /** Rotate the pass secret, e.g. after a lockout or a lost phone. */
-shipmentsRouter.post("/:id/reissue-code", requireRole("coordinator"), (req, res) => {
+shipmentsRouter.post("/:id/reissue-code", requireRole("coordinator"), async (req, res) => {
   const user = currentUser(req);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
   assertStatus(row, ["assigned", "en_route", "at_warehouse"]);
-  db.prepare(
-    `UPDATE shipments SET totp_secret = ?, last_totp_step = NULL, failed_attempts = 0, locked = 0
-     WHERE id = ?`,
-  ).run(generateSecret(), row.id);
-  audit(row.id, user, "pass_reissued");
-  res.json(respond(row.id, user));
+  await sql`
+    UPDATE shipments SET totp_secret = ${generateSecret()}, last_totp_step = NULL, failed_attempts = 0, locked = false
+    WHERE id = ${row.id}`;
+  await audit(row.id, user, "pass_reissued");
+  res.json(await respond(row.id, user));
 });
 
 // ---------- driver ----------
 
-shipmentsRouter.post("/:id/accept", requireRole("driver"), (req, res) => {
+shipmentsRouter.post("/:id/accept", requireRole("driver"), async (req, res) => {
   const user = currentUser(req);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
   assertOwnShipment(row, user);
   assertStatus(row, ["assigned"]);
-  db.prepare("UPDATE shipments SET status = 'en_route', accepted_at = ? WHERE id = ?").run(now(), row.id);
-  audit(row.id, user, "accepted");
-  res.json(respond(row.id, user));
+  await sql`UPDATE shipments SET status = 'en_route', accepted_at = now() WHERE id = ${row.id}`;
+  await audit(row.id, user, "accepted");
+  res.json(await respond(row.id, user));
 });
 
-shipmentsRouter.post("/:id/decline", requireRole("driver"), (req, res) => {
+shipmentsRouter.post("/:id/decline", requireRole("driver"), async (req, res) => {
   const user = currentUser(req);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
   assertOwnShipment(row, user);
   assertStatus(row, ["assigned"]);
-  db.prepare(
-    `UPDATE shipments SET status = 'unassigned', driver_id = NULL, carrier_id = NULL,
-       totp_secret = NULL, last_totp_step = NULL, declined_by = ?
-     WHERE id = ?`,
-  ).run(user.driverId ?? null, row.id);
-  audit(row.id, user, "declined");
+  await sql`
+    UPDATE shipments SET status = 'unassigned', driver_id = NULL, carrier_id = NULL,
+      totp_secret = NULL, last_totp_step = NULL, declined_by = ${user.driverId ?? null}
+    WHERE id = ${row.id}`;
+  await audit(row.id, user, "declined");
   // The driver no longer owns it, so there's nothing of theirs to return.
   res.json({ ok: true });
 });
 
-shipmentsRouter.post("/:id/arrive", requireRole("driver"), (req, res) => {
+shipmentsRouter.post("/:id/arrive", requireRole("driver"), async (req, res) => {
   const user = currentUser(req);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
   assertOwnShipment(row, user);
   assertStatus(row, ["en_route"]);
-  db.prepare("UPDATE shipments SET status = 'at_warehouse', arrived_at = ? WHERE id = ?").run(now(), row.id);
-  audit(row.id, user, "arrived");
-  res.json(respond(row.id, user));
+  await sql`UPDATE shipments SET status = 'at_warehouse', arrived_at = now() WHERE id = ${row.id}`;
+  await audit(row.id, user, "arrived");
+  res.json(await respond(row.id, user));
 });
 
 // ---------- clerk ----------
@@ -224,13 +215,13 @@ const scanSchema = z.union([
   z.object({ code: z.string().regex(/^\d{6}$/, "Code must be 6 digits") }),
 ]);
 
-/** Count a wrong code against a specific shipment; lock it after too many. */
-function recordFailedCode(row: ShipmentRow, user: AuthUser): never {
+/** Count a wrong code against a specific shipment; lock it after too many. Returns the error to throw. */
+async function recordFailedCode(row: ShipmentRow, user: AuthUser): Promise<HttpError> {
   const attempts = row.failed_attempts + 1;
   const locked = attempts >= config.maxCodeAttempts;
-  db.prepare("UPDATE shipments SET failed_attempts = ?, locked = ? WHERE id = ?").run(attempts, locked ? 1 : 0, row.id);
-  audit(row.id, user, locked ? "scan_locked" : "scan_failed_code", { attempts });
-  throw new HttpError(
+  await sql`UPDATE shipments SET failed_attempts = ${attempts}, locked = ${locked} WHERE id = ${row.id}`;
+  await audit(row.id, user, locked ? "scan_locked" : "scan_failed_code", { attempts });
+  return new HttpError(
     locked ? 423 : 400,
     locked
       ? "Too many invalid codes. Pass locked. Do NOT release the load; contact the coordinator."
@@ -244,7 +235,7 @@ function recordFailedCode(row: ShipmentRow, user: AuthUser): never {
  * server returns the authoritative driver + delivery details from its own
  * records, plus a short-lived ticket that authorises the final verify step.
  */
-shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, (req, res) => {
+shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, async (req, res) => {
   const user = currentUser(req);
   const body = scanSchema.parse(req.body);
 
@@ -255,20 +246,20 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, (req, res) =>
   if ("qr" in body) {
     pass = parsePass(body.qr);
     code = pass.code;
-    const found = db.prepare(`${SHIPMENT_SELECT} WHERE s.id = ?`).get(pass.shipment.id) as unknown as ShipmentRow | undefined;
+    const found = await findShipment(pass.shipment.id);
     if (!found) {
-      audit(null, user, "scan_unknown_shipment", { shipmentId: pass.shipment.id });
+      await audit(null, user, "scan_unknown_shipment", { shipmentId: pass.shipment.id });
       throw new HttpError(404, "This pass refers to an order TruTruck has no record of.");
     }
     row = found;
   } else {
     code = body.code;
-    const candidates = db
-      .prepare(`${SHIPMENT_SELECT} WHERE s.status IN ('en_route','at_warehouse') AND s.locked = 0 AND s.totp_secret IS NOT NULL`)
-      .all() as unknown as ShipmentRow[];
+    const candidates = await sql<ShipmentRow[]>`
+      ${SHIPMENT_SELECT}
+      WHERE s.status IN ('en_route','at_warehouse') AND NOT s.locked AND s.totp_secret IS NOT NULL`;
     const matches = candidates.filter((r) => matchTotp(r.totp_secret!, code) !== null);
     if (matches.length === 0) {
-      audit(null, user, "lookup_failed");
+      await audit(null, user, "lookup_failed");
       throw new HttpError(404, "No active driver pass matches that code. Codes refresh every 30 seconds.");
     }
     if (matches.length > 1) {
@@ -281,7 +272,7 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, (req, res) =>
     throw new HttpError(409, `${row.driver_name ?? "The driver"} hasn't accepted ${row.reference_code} yet.`);
   }
   if (row.status === "verified" || row.status === "in_transit") {
-    audit(row.id, user, "scan_after_checkin");
+    await audit(row.id, user, "scan_after_checkin");
     throw new HttpError(409, `${row.reference_code} has already been checked in. This pass is no longer valid.`);
   }
   if (row.status === "unassigned") {
@@ -293,31 +284,31 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, (req, res) =>
   if (!row.totp_secret || !row.driver_id) throw new HttpError(409, "No active pass for this order.");
 
   const step = matchTotp(row.totp_secret, code);
-  if (step === null) recordFailedCode(row, user);
+  if (step === null) throw await recordFailedCode(row, user);
 
   // Each code works once: a photo of someone else's screen is useless after one scan.
   if (row.last_totp_step !== null && step <= row.last_totp_step) {
-    audit(row.id, user, "scan_replayed", { step });
+    await audit(row.id, user, "scan_replayed", { step });
     throw new HttpError(409, "This code has already been used. Wait for the driver's next code (max 30 seconds).");
   }
-  db.prepare("UPDATE shipments SET last_totp_step = ?, failed_attempts = 0 WHERE id = ?").run(step, row.id);
+  await sql`UPDATE shipments SET last_totp_step = ${step}, failed_attempts = 0 WHERE id = ${row.id}`;
 
-  const driver = getDriver(row.driver_id);
+  const driver = await getDriver(row.driver_id);
   const mismatches = pass ? comparePass(pass, row, driver) : [];
   if (mismatches.length > 0) {
-    audit(row.id, user, "scan_tampered", { fields: mismatches.map((m) => m.field) });
+    await audit(row.id, user, "scan_tampered", { fields: mismatches.map((m) => m.field) });
     throw new HttpError(422, "Pass details don't match dispatch records. Possible forged pass: do NOT release the load.", {
       mismatches,
     });
   }
 
-  audit(row.id, user, "scan_ok", { via: pass ? "qr" : "code" });
+  await audit(row.id, user, "scan_ok", { via: pass ? "qr" : "code" });
   const ticket = jwt.sign({ sid: row.id }, config.jwtSecret, { audience: TICKET_AUDIENCE, expiresIn: "5m" });
   res.json({
     via: pass ? "qr" : "code",
     shipment: shipmentDto(row, user),
     driver: driverDto(driver),
-    carrier: carrierDto(getCarrier(driver.carrier_id)),
+    carrier: carrierDto(await getCarrier(driver.carrier_id)),
     ticket,
   });
 });
@@ -331,10 +322,10 @@ const verifySchema = z.object({
   notes: z.string().trim().max(500).optional(),
 });
 
-shipmentsRouter.post("/:id/verify", requireRole("clerk"), verifyLimiter, (req, res) => {
+shipmentsRouter.post("/:id/verify", requireRole("clerk"), verifyLimiter, async (req, res) => {
   const user = currentUser(req);
   const body = verifySchema.parse(req.body);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
 
   try {
     const payload = jwt.verify(body.ticket, config.jwtSecret, { audience: TICKET_AUDIENCE }) as { sid?: string };
@@ -346,36 +337,35 @@ shipmentsRouter.post("/:id/verify", requireRole("clerk"), verifyLimiter, (req, r
   if (row.locked) throw new HttpError(423, "Pass locked. Coordinator must reissue it.");
 
   if (!body.idMatches || !body.vehicleMatches) {
-    audit(row.id, user, "verify_failed_checks", { idMatches: body.idMatches, vehicleMatches: body.vehicleMatches });
+    await audit(row.id, user, "verify_failed_checks", { idMatches: body.idMatches, vehicleMatches: body.vehicleMatches });
     throw new HttpError(400, !body.idMatches
       ? "Driver ID does not match the assigned driver."
       : "Vehicle does not match the assigned plate/description.");
   }
 
-  const driver = getDriver(row.driver_id ?? "");
+  const driver = await getDriver(row.driver_id ?? "");
   if (normalizePlate(body.plateEntered) !== normalizePlate(driver.vehicle_plate)) {
-    audit(row.id, user, "plate_mismatch", { plateEntered: body.plateEntered });
+    await audit(row.id, user, "plate_mismatch", { plateEntered: body.plateEntered });
     throw new HttpError(400, "Plate entered does not match the assigned vehicle.");
   }
 
   // Success: the pass is retired so it can't be used again.
   const dock = body.dockNumber || "Dock 1";
-  transaction(() => {
-    db.prepare(
-      `UPDATE shipments SET status = 'verified', verified_at = ?, arrived_at = COALESCE(arrived_at, ?),
-         dock_number = ?, verification_notes = ?, totp_secret = NULL, last_totp_step = NULL
-       WHERE id = ?`,
-    ).run(now(), now(), dock, body.notes ?? null, row.id);
-    audit(row.id, user, "verified", { dockNumber: dock });
+  await sql.begin(async (tx) => {
+    await tx`
+      UPDATE shipments SET status = 'verified', verified_at = now(), arrived_at = COALESCE(arrived_at, now()),
+        dock_number = ${dock}, verification_notes = ${body.notes ?? null}, totp_secret = NULL, last_totp_step = NULL
+      WHERE id = ${row.id}`;
+    await audit(row.id, user, "verified", { dockNumber: dock }, tx);
   });
-  res.json(respond(row.id, user));
+  res.json(await respond(row.id, user));
 });
 
-shipmentsRouter.post("/:id/release", requireRole("clerk"), (req, res) => {
+shipmentsRouter.post("/:id/release", requireRole("clerk"), async (req, res) => {
   const user = currentUser(req);
-  const row = getShipment(req.params.id as string);
+  const row = await getShipment(req.params.id as string);
   assertStatus(row, ["verified"]);
-  db.prepare("UPDATE shipments SET status = 'in_transit', released_at = ? WHERE id = ?").run(now(), row.id);
-  audit(row.id, user, "released");
-  res.json(respond(row.id, user));
+  await sql`UPDATE shipments SET status = 'in_transit', released_at = now() WHERE id = ${row.id}`;
+  await audit(row.id, user, "released");
+  res.json(await respond(row.id, user));
 });

@@ -10,11 +10,17 @@ function jwtSecret(): string {
   return "dev-only-insecure-secret";
 }
 
+function databaseUrl(): string {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL must be set (Supabase > Connect > Session pooler)");
+  return url;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   jwtSecret: jwtSecret(),
   corsOrigin: (process.env.CORS_ORIGIN ?? "http://localhost:5173").split(","),
-  dbPath: process.env.DB_PATH ?? "./trutruck.db",
+  databaseUrl: databaseUrl(),
   totpStepSeconds: Number(process.env.TOTP_STEP_SECONDS ?? 30),
   // Accept codes from this many 30s steps either side of now, to absorb clock drift.
   totpWindow: Number(process.env.TOTP_WINDOW ?? 1),

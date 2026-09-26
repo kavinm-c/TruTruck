@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { db, migrate, transaction } from "./db.js";
+import { sql, migrate } from "./db.js";
 import { generateSecret } from "./totp.js";
 
 function isoDate(offsetDays: number): string {
@@ -27,36 +27,43 @@ function avatar(name: string, bg: string, fg: string): string {
 
 const WAREHOUSE = "Warehouse 4 - 8 Industrial Pkwy, Brampton, ON";
 
-export function seed({ reset = false } = {}) {
-  migrate();
+interface SeedShipment {
+  id: string;
+  ref: string;
+  cargo: string;
+  pickup: string;
+  dropoff: string;
+  date: string;
+  time: string;
+  status: string;
+  carrier: string | null;
+  driver: string | null;
+  secret: string | null;
+  declined: string | null;
+  dock: string | null;
+  accepted: string | null;
+  arrived: string | null;
+  verified: string | null;
+  released: string | null;
+}
+
+export async function seed({ reset = false } = {}) {
+  await migrate();
   if (reset) {
-    db.exec("DELETE FROM audit_log; DELETE FROM shipments; DELETE FROM drivers; DELETE FROM carriers;");
+    await sql`TRUNCATE audit_log, shipments, drivers, carriers RESTART IDENTITY`;
   }
-  const hasData = db.prepare("SELECT COUNT(*) AS n FROM carriers").get() as unknown as { n: number };
-  if (hasData.n > 0) return;
+  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM carriers`;
+  if (n > 0) return;
 
-  const insertCarrier = db.prepare(
-    "INSERT INTO carriers (id, name, phone, cvor_number, cvor_status) VALUES (?, ?, ?, ?, ?)",
-  );
-  const insertDriver = db.prepare(
-    `INSERT INTO drivers (id, name, phone, email, photo, carrier_id, license_number, vehicle_plate, vehicle_description)
-     VALUES (@id, @name, @phone, @email, @photo, @carrier, @license, @plate, @vehicle)`,
-  );
-  const insertShipment = db.prepare(
-    `INSERT INTO shipments (id, reference_code, cargo, pickup_location, dropoff_location, pickup_date, pickup_time,
-       status, carrier_id, driver_id, totp_secret, declined_by, dock_number,
-       accepted_at, arrived_at, verified_at, released_at)
-     VALUES (@id, @ref, @cargo, @pickup, @dropoff, @date, @time, @status, @carrier, @driver,
-       @secret, @declined, @dock, @accepted, @arrived, @verified, @released)`,
-  );
-
-  transaction(() => {
+  await sql.begin(async (tx) => {
     // All fictional demo data.
-    insertCarrier.run("car-1", "Redline Freight Co.", "(905) 555-0134", "123-456-789", "active");
-    insertCarrier.run("car-2", "Pacific Crest Hauling", "(416) 555-0188", "234-567-890", "active");
-    insertCarrier.run("car-3", "Ironwood Logistics", "(905) 555-0162", "345-678-901", "active");
-    // Demo case: a carrier whose registration has lapsed (like the All Days Trucking pattern).
-    insertCarrier.run("car-4", "QuickHaul Express", "(647) 555-0199", "456-789-012", "expired");
+    await tx`INSERT INTO carriers ${tx([
+      { id: "car-1", name: "Redline Freight Co.", phone: "(905) 555-0134", cvor_number: "123-456-789", cvor_status: "active" },
+      { id: "car-2", name: "Pacific Crest Hauling", phone: "(416) 555-0188", cvor_number: "234-567-890", cvor_status: "active" },
+      { id: "car-3", name: "Ironwood Logistics", phone: "(905) 555-0162", cvor_number: "345-678-901", cvor_status: "active" },
+      // Demo case: a carrier whose registration has lapsed (like the All Days Trucking pattern).
+      { id: "car-4", name: "QuickHaul Express", phone: "(647) 555-0199", cvor_number: "456-789-012", cvor_status: "expired" },
+    ])}`;
 
     const drivers = [
       { id: "drv-1", name: "Marcus Webb", phone: "(905) 555-0117", email: "marcus.webb@redlinefreight.example",
@@ -75,49 +82,62 @@ export function seed({ reset = false } = {}) {
         carrier: "car-1", license: "N5678-90123-45678", plate: "EF31 557",
         vehicle: "Black International LT, 53' dry van", colors: ["#581c87", "#d8b4fe"] },
     ];
-    for (const { colors, ...d } of drivers) {
-      insertDriver.run({ ...d, photo: avatar(d.name, colors[0], colors[1]) });
-    }
+    await tx`INSERT INTO drivers ${tx(
+      drivers.map((d) => ({
+        id: d.id, name: d.name, phone: d.phone, email: d.email, photo: avatar(d.name, d.colors[0], d.colors[1]),
+        carrier_id: d.carrier, license_number: d.license, vehicle_plate: d.plate, vehicle_description: d.vehicle,
+      })),
+    )}`;
 
     const base = { pickup: WAREHOUSE, carrier: null, driver: null, secret: null, declined: null, dock: null,
       accepted: null, arrived: null, verified: null, released: null };
 
-    // Demo: dispatch to Sam Keller is blocked (QuickHaul's CVOR has expired).
-    insertShipment.run({ ...base, id: "shp-1001", ref: "TRU-1001", cargo: "24 pallets of packaged electronics",
-      dropoff: "Distribution Centre B - 1450 Innes Rd, Ottawa, ON", date: isoDate(1), time: "08:00",
-      status: "unassigned" });
+    const shipments: SeedShipment[] = [
+      // Demo: dispatch to Sam Keller is blocked (QuickHaul's CVOR has expired).
+      { ...base, id: "shp-1001", ref: "TRU-1001", cargo: "24 pallets of packaged electronics",
+        dropoff: "Distribution Centre B - 1450 Innes Rd, Ottawa, ON", date: isoDate(1), time: "08:00",
+        status: "unassigned" },
 
-    // Demo: waiting for Marcus to accept or decline.
-    insertShipment.run({ ...base, id: "shp-1002", ref: "TRU-1002", cargo: "12 pallets of bottled beverages",
-      dropoff: "Regional Hub - 200 Exeter Rd, London, ON", date: isoDate(1), time: "09:30",
-      status: "assigned", carrier: "car-1", driver: "drv-1", secret: generateSecret() });
+      // Demo: waiting for Marcus to accept or decline.
+      { ...base, id: "shp-1002", ref: "TRU-1002", cargo: "12 pallets of bottled beverages",
+        dropoff: "Regional Hub - 200 Exeter Rd, London, ON", date: isoDate(1), time: "09:30",
+        status: "assigned", carrier: "car-1", driver: "drv-1", secret: generateSecret() },
 
-    // Demo: Dana is at the dock with a live QR pass; scan it from the clerk view.
-    insertShipment.run({ ...base, id: "shp-1003", ref: "TRU-1003", cargo: "8 crates of machine parts",
-      dropoff: "Assembly Plant - 3500 Rue Notre-Dame, Montreal, QC", date: isoDate(0), time: "13:00",
-      status: "at_warehouse", carrier: "car-2", driver: "drv-2", secret: generateSecret(),
-      accepted: minutesAgo(120), arrived: minutesAgo(10) });
+      // Demo: Dana is at the dock with a live QR pass; scan it from the clerk view.
+      { ...base, id: "shp-1003", ref: "TRU-1003", cargo: "8 crates of machine parts",
+        dropoff: "Assembly Plant - 3500 Rue Notre-Dame, Montreal, QC", date: isoDate(0), time: "13:00",
+        status: "at_warehouse", carrier: "car-2", driver: "drv-2", secret: generateSecret(),
+        accepted: minutesAgo(120), arrived: minutesAgo(10) },
 
-    // Demo: Ollie accepted and is on the way; his pass is already live.
-    insertShipment.run({ ...base, id: "shp-1004", ref: "TRU-1004", cargo: "16 pallets of frozen produce",
-      dropoff: "Cold Storage - 95 Nebo Rd, Hamilton, ON", date: isoDate(0), time: "15:30",
-      status: "en_route", carrier: "car-3", driver: "drv-3", secret: generateSecret(),
-      accepted: minutesAgo(45) });
+      // Demo: Ollie accepted and is on the way; his pass is already live.
+      { ...base, id: "shp-1004", ref: "TRU-1004", cargo: "16 pallets of frozen produce",
+        dropoff: "Cold Storage - 95 Nebo Rd, Hamilton, ON", date: isoDate(0), time: "15:30",
+        status: "en_route", carrier: "car-3", driver: "drv-3", secret: generateSecret(),
+        accepted: minutesAgo(45) },
 
-    insertShipment.run({ ...base, id: "shp-1005", ref: "TRU-1005", cargo: "40 pallets of canned goods",
-      dropoff: "Retail DC - 1 Cataraqui Woods Dr, Kingston, ON", date: isoDate(0), time: "07:00",
-      status: "verified", carrier: "car-1", driver: "drv-5", dock: "Dock 7",
-      accepted: minutesAgo(300), arrived: minutesAgo(200), verified: minutesAgo(190) });
+      { ...base, id: "shp-1005", ref: "TRU-1005", cargo: "40 pallets of canned goods",
+        dropoff: "Retail DC - 1 Cataraqui Woods Dr, Kingston, ON", date: isoDate(0), time: "07:00",
+        status: "verified", carrier: "car-1", driver: "drv-5", dock: "Dock 7",
+        accepted: minutesAgo(300), arrived: minutesAgo(200), verified: minutesAgo(190) },
 
-    insertShipment.run({ ...base, id: "shp-1006", ref: "TRU-1006", cargo: "30 rolls of industrial carpet",
-      dropoff: "Flooring Depot - 740 Wilson Ave, Toronto, ON", date: isoDate(-1), time: "10:00",
-      status: "in_transit", carrier: "car-2", driver: "drv-2", dock: "Dock 3",
-      accepted: minutesAgo(1600), arrived: minutesAgo(1500), verified: minutesAgo(1490), released: minutesAgo(1460) });
+      { ...base, id: "shp-1006", ref: "TRU-1006", cargo: "30 rolls of industrial carpet",
+        dropoff: "Flooring Depot - 740 Wilson Ave, Toronto, ON", date: isoDate(-1), time: "10:00",
+        status: "in_transit", carrier: "car-2", driver: "drv-2", dock: "Dock 3",
+        accepted: minutesAgo(1600), arrived: minutesAgo(1500), verified: minutesAgo(1490), released: minutesAgo(1460) },
 
-    // Demo: Marcus declined this one, so it's back with the coordinator to reassign.
-    insertShipment.run({ ...base, id: "shp-1007", ref: "TRU-1007", cargo: "18 pallets of frozen poultry",
-      dropoff: "Cold Storage - 95 Nebo Rd, Hamilton, ON", date: isoDate(1), time: "06:00",
-      status: "unassigned", declined: "drv-1" });
+      // Demo: Marcus declined this one, so it's back with the coordinator to reassign.
+      { ...base, id: "shp-1007", ref: "TRU-1007", cargo: "18 pallets of frozen poultry",
+        dropoff: "Cold Storage - 95 Nebo Rd, Hamilton, ON", date: isoDate(1), time: "06:00",
+        status: "unassigned", declined: "drv-1" },
+    ];
+    await tx`INSERT INTO shipments ${tx(
+      shipments.map((s) => ({
+        id: s.id, reference_code: s.ref, cargo: s.cargo, pickup_location: s.pickup, dropoff_location: s.dropoff,
+        pickup_date: s.date, pickup_time: s.time, status: s.status, carrier_id: s.carrier, driver_id: s.driver,
+        totp_secret: s.secret, declined_by: s.declined, dock_number: s.dock, accepted_at: s.accepted,
+        arrived_at: s.arrived, verified_at: s.verified, released_at: s.released,
+      })),
+    )}`;
   });
 
   console.log("[seed] demo data loaded");
@@ -125,5 +145,6 @@ export function seed({ reset = false } = {}) {
 
 // Run directly: `npm run seed` resets the DB to demo state.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  seed({ reset: process.argv.includes("--reset") });
+  await seed({ reset: process.argv.includes("--reset") });
+  await sql.end();
 }
