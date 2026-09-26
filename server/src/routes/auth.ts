@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
-import { sql, type DriverRow } from "../db.js";
+import { maybe, must, supabase, type DriverRow } from "../db.js";
 import { HttpError } from "../errors.js";
 import { signToken } from "../auth.js";
 
@@ -17,7 +17,7 @@ authRouter.use((_req, _res, next) => {
 });
 
 authRouter.get("/demo-users", async (_req, res) => {
-  const drivers = await sql<Pick<DriverRow, "id" | "name">[]>`SELECT id, name FROM drivers ORDER BY name`;
+  const drivers = must(await supabase.from("drivers").select("id, name").order("name")) as Pick<DriverRow, "id" | "name">[];
   res.json({ roles: ["coordinator", "driver", "clerk"], drivers });
 });
 
@@ -30,7 +30,7 @@ const loginSchema = z.discriminatedUnion("role", [
 authRouter.post("/demo-login", async (req, res) => {
   const body = loginSchema.parse(req.body);
   if (body.role === "driver") {
-    const [exists] = await sql`SELECT 1 FROM drivers WHERE id = ${body.driverId}`;
+    const exists = maybe(await supabase.from("drivers").select("id").eq("id", body.driverId).maybeSingle());
     if (!exists) throw new HttpError(404, "Unknown driver");
     res.json({ token: signToken({ role: "driver", driverId: body.driverId }), user: body });
     return;

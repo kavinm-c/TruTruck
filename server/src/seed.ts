@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { sql, migrate } from "./db.js";
+import { assertSchema, must, supabase } from "./db.js";
 import { generateSecret } from "./totp.js";
 
 function isoDate(offsetDays: number): string {
@@ -48,22 +48,25 @@ interface SeedShipment {
 }
 
 export async function seed({ reset = false } = {}) {
-  await migrate();
+  await assertSchema();
   if (reset) {
-    await sql`TRUNCATE audit_log, shipments, drivers, carriers RESTART IDENTITY`;
+    // PostgREST refuses unfiltered deletes, so match every row explicitly. Children first.
+    must(await supabase.from("audit_log").delete().gte("id", 0));
+    must(await supabase.from("shipments").delete().neq("id", ""));
+    must(await supabase.from("drivers").delete().neq("id", ""));
+    must(await supabase.from("carriers").delete().neq("id", ""));
   }
-  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM carriers`;
-  if (n > 0) return;
+  const existing = must(await supabase.from("carriers").select("id").limit(1));
+  if (existing.length > 0) return;
 
-  await sql.begin(async (tx) => {
-    // All fictional demo data.
-    await tx`INSERT INTO carriers ${tx([
+  // All fictional demo data. No transaction over HTTPS, so parents are inserted before children.
+  must(await supabase.from("carriers").insert([
       { id: "car-1", name: "Redline Freight Co.", phone: "(905) 555-0134", cvor_number: "123-456-789", cvor_status: "active" },
       { id: "car-2", name: "Pacific Crest Hauling", phone: "(416) 555-0188", cvor_number: "234-567-890", cvor_status: "active" },
       { id: "car-3", name: "Ironwood Logistics", phone: "(905) 555-0162", cvor_number: "345-678-901", cvor_status: "active" },
       // Demo case: a carrier whose registration has lapsed (like the All Days Trucking pattern).
       { id: "car-4", name: "QuickHaul Express", phone: "(647) 555-0199", cvor_number: "456-789-012", cvor_status: "expired" },
-    ])}`;
+    ]));
 
     const drivers = [
       { id: "drv-1", name: "Marcus Webb", phone: "(905) 555-0117", email: "marcus.webb@redlinefreight.example",
@@ -82,12 +85,12 @@ export async function seed({ reset = false } = {}) {
         carrier: "car-1", license: "N5678-90123-45678", plate: "EF31 557",
         vehicle: "Black International LT, 53' dry van", colors: ["#581c87", "#d8b4fe"] },
     ];
-    await tx`INSERT INTO drivers ${tx(
+    must(await supabase.from("drivers").insert(
       drivers.map((d) => ({
         id: d.id, name: d.name, phone: d.phone, email: d.email, photo: avatar(d.name, d.colors[0], d.colors[1]),
         carrier_id: d.carrier, license_number: d.license, vehicle_plate: d.plate, vehicle_description: d.vehicle,
       })),
-    )}`;
+    ));
 
     const base = { pickup: WAREHOUSE, carrier: null, driver: null, secret: null, declined: null, dock: null,
       accepted: null, arrived: null, verified: null, released: null };
@@ -130,15 +133,14 @@ export async function seed({ reset = false } = {}) {
         dropoff: "Cold Storage - 95 Nebo Rd, Hamilton, ON", date: isoDate(1), time: "06:00",
         status: "unassigned", declined: "drv-1" },
     ];
-    await tx`INSERT INTO shipments ${tx(
+    must(await supabase.from("shipments").insert(
       shipments.map((s) => ({
         id: s.id, reference_code: s.ref, cargo: s.cargo, pickup_location: s.pickup, dropoff_location: s.dropoff,
         pickup_date: s.date, pickup_time: s.time, status: s.status, carrier_id: s.carrier, driver_id: s.driver,
         totp_secret: s.secret, declined_by: s.declined, dock_number: s.dock, accepted_at: s.accepted,
         arrived_at: s.arrived, verified_at: s.verified, released_at: s.released,
       })),
-    )}`;
-  });
+    ));
 
   console.log("[seed] demo data loaded");
 }
@@ -146,5 +148,4 @@ export async function seed({ reset = false } = {}) {
 // Run directly: `npm run seed` resets the DB to demo state.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   await seed({ reset: process.argv.includes("--reset") });
-  await sql.end();
 }

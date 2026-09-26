@@ -4,8 +4,11 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { config } from "../config.js";
 import {
-  sql,
-  SHIPMENT_SELECT,
+  must,
+  maybe,
+  supabase,
+  selectShipments,
+  shipmentRows,
   type CarrierRow,
   type ShipmentRow,
   type ShipmentStatus,
@@ -33,9 +36,15 @@ const verifyLimiter = rateLimit({
 // ---------- helpers ----------
 
 async function findShipment(id: string): Promise<ShipmentRow | undefined> {
-  const [row] = await sql<ShipmentRow[]>`${SHIPMENT_SELECT} WHERE s.id = ${id}`;
+  const [row] = shipmentRows(must(await selectShipments().eq("id", id)));
   return row;
 }
+
+async function updateShipment(id: string, patch: Partial<ShipmentRow>) {
+  must(await supabase.from("shipments").update(patch).eq("id", id));
+}
+
+const now = () => new Date().toISOString();
 
 async function getShipment(id: string): Promise<ShipmentRow> {
   const row = await findShipment(id);
@@ -44,13 +53,13 @@ async function getShipment(id: string): Promise<ShipmentRow> {
 }
 
 async function getDriver(id: string): Promise<DriverRow> {
-  const [row] = await sql<DriverRow[]>`SELECT * FROM drivers WHERE id = ${id}`;
+  const row = maybe(await supabase.from("drivers").select("*").eq("id", id).maybeSingle()) as DriverRow | null;
   if (!row) throw new HttpError(404, "Driver not found");
   return row;
 }
 
 async function getCarrier(id: string): Promise<CarrierRow> {
-  const [row] = await sql<CarrierRow[]>`SELECT * FROM carriers WHERE id = ${id}`;
+  const row = maybe(await supabase.from("carriers").select("*").eq("id", id).maybeSingle()) as CarrierRow | null;
   if (!row) throw new HttpError(404, "Carrier not found");
   return row;
 }
@@ -86,14 +95,18 @@ shipmentsRouter.get("/", async (req, res) => {
   const user = currentUser(req);
   let rows: ShipmentRow[];
   if (user.role === "driver") {
-    rows = await sql<ShipmentRow[]>`
-      ${SHIPMENT_SELECT} WHERE s.driver_id = ${user.driverId ?? ""} ORDER BY s.pickup_date, s.pickup_time`;
+    rows = shipmentRows(must(
+      await selectShipments().eq("driver_id", user.driverId ?? "").order("pickup_date").order("pickup_time"),
+    ));
   } else if (user.role === "clerk") {
-    rows = await sql<ShipmentRow[]>`
-      ${SHIPMENT_SELECT} WHERE s.status IN ('at_warehouse','verified','in_transit')
-      ORDER BY COALESCE(s.verified_at, s.arrived_at) DESC`;
+    rows = shipmentRows(must(await selectShipments().in("status", ["at_warehouse", "verified", "in_transit"])));
+    // Most recent check-in first (PostgREST can't order by an expression).
+    const checkedIn = (r: ShipmentRow) => r.verified_at ?? r.arrived_at ?? "";
+    rows.sort((a, b) => checkedIn(b).localeCompare(checkedIn(a)));
   } else {
-    rows = await sql<ShipmentRow[]>`${SHIPMENT_SELECT} ORDER BY s.pickup_date, s.pickup_time, s.reference_code`;
+    rows = shipmentRows(must(
+      await selectShipments().order("pickup_date").order("pickup_time").order("reference_code"),
+    ));
   }
   res.json(rows.map((r) => shipmentDto(r, user)));
 });
@@ -110,9 +123,9 @@ const orderSchema = z.object({
 });
 
 async function nextReference(): Promise<{ id: string; ref: string }> {
-  const [{ n }] = await sql<{ n: number | null }[]>`
-    SELECT MAX(CAST(substr(reference_code, 5) AS INTEGER)) AS n FROM shipments`;
-  const next = (n ?? 1000) + 1;
+  const refs = must(await supabase.from("shipments").select("reference_code"));
+  const n = Math.max(1000, ...refs.map((r) => Number(r.reference_code.slice(4)) || 0));
+  const next = n + 1;
   return { id: `shp-${next}`, ref: `TRU-${next}` };
 }
 
@@ -126,12 +139,14 @@ shipmentsRouter.post("/", requireRole("coordinator"), async (req, res) => {
   const dispatch = body.driverId ? await dispatchableDriver(body.driverId, null, user) : null;
 
   const { id, ref } = await nextReference();
-  await sql`
-    INSERT INTO shipments (id, reference_code, cargo, pickup_location, dropoff_location, pickup_date,
-      pickup_time, status, carrier_id, driver_id, totp_secret)
-    VALUES (${id}, ${ref}, ${body.cargo}, ${body.pickupLocation}, ${body.dropoffLocation}, ${body.pickupDate},
-      ${body.pickupTime}, ${dispatch ? "assigned" : "unassigned"}, ${dispatch?.carrier.id ?? null},
-      ${dispatch?.driver.id ?? null}, ${dispatch ? generateSecret() : null})`;
+  must(
+    await supabase.from("shipments").insert({
+      id, reference_code: ref, cargo: body.cargo, pickup_location: body.pickupLocation,
+      dropoff_location: body.dropoffLocation, pickup_date: body.pickupDate, pickup_time: body.pickupTime,
+      status: dispatch ? "assigned" : "unassigned", carrier_id: dispatch?.carrier.id ?? null,
+      driver_id: dispatch?.driver.id ?? null, totp_secret: dispatch ? generateSecret() : null,
+    }),
+  );
 
   await audit(id, user, "order_created", { driverId: dispatch?.driver.id ?? null });
   res.status(201).json(await respond(id, user));
@@ -147,11 +162,11 @@ shipmentsRouter.post("/:id/assign", requireRole("coordinator"), async (req, res)
   const { driver, carrier } = await dispatchableDriver(driverId, row.id, user);
 
   // New driver means a brand-new pass secret; the old driver's pass stops working.
-  await sql`
-    UPDATE shipments SET carrier_id = ${carrier.id}, driver_id = ${driver.id}, status = 'assigned',
-      totp_secret = ${generateSecret()}, last_totp_step = NULL, failed_attempts = 0, locked = false,
-      declined_by = NULL, accepted_at = NULL, arrived_at = NULL
-    WHERE id = ${row.id}`;
+  await updateShipment(row.id, {
+    carrier_id: carrier.id, driver_id: driver.id, status: "assigned",
+    totp_secret: generateSecret(), last_totp_step: null, failed_attempts: 0, locked: false,
+    declined_by: null, accepted_at: null, arrived_at: null,
+  });
 
   await audit(row.id, user, row.driver_id ? "reassigned" : "assigned", { driverId });
   res.json(await respond(row.id, user));
@@ -162,9 +177,7 @@ shipmentsRouter.post("/:id/reissue-code", requireRole("coordinator"), async (req
   const user = currentUser(req);
   const row = await getShipment(req.params.id as string);
   assertStatus(row, ["assigned", "en_route", "at_warehouse"]);
-  await sql`
-    UPDATE shipments SET totp_secret = ${generateSecret()}, last_totp_step = NULL, failed_attempts = 0, locked = false
-    WHERE id = ${row.id}`;
+  await updateShipment(row.id, { totp_secret: generateSecret(), last_totp_step: null, failed_attempts: 0, locked: false });
   await audit(row.id, user, "pass_reissued");
   res.json(await respond(row.id, user));
 });
@@ -176,7 +189,7 @@ shipmentsRouter.post("/:id/accept", requireRole("driver"), async (req, res) => {
   const row = await getShipment(req.params.id as string);
   assertOwnShipment(row, user);
   assertStatus(row, ["assigned"]);
-  await sql`UPDATE shipments SET status = 'en_route', accepted_at = now() WHERE id = ${row.id}`;
+  await updateShipment(row.id, { status: "en_route", accepted_at: now() });
   await audit(row.id, user, "accepted");
   res.json(await respond(row.id, user));
 });
@@ -186,10 +199,10 @@ shipmentsRouter.post("/:id/decline", requireRole("driver"), async (req, res) => 
   const row = await getShipment(req.params.id as string);
   assertOwnShipment(row, user);
   assertStatus(row, ["assigned"]);
-  await sql`
-    UPDATE shipments SET status = 'unassigned', driver_id = NULL, carrier_id = NULL,
-      totp_secret = NULL, last_totp_step = NULL, declined_by = ${user.driverId ?? null}
-    WHERE id = ${row.id}`;
+  await updateShipment(row.id, {
+    status: "unassigned", driver_id: null, carrier_id: null,
+    totp_secret: null, last_totp_step: null, declined_by: user.driverId ?? null,
+  });
   await audit(row.id, user, "declined");
   // The driver no longer owns it, so there's nothing of theirs to return.
   res.json({ ok: true });
@@ -200,7 +213,7 @@ shipmentsRouter.post("/:id/arrive", requireRole("driver"), async (req, res) => {
   const row = await getShipment(req.params.id as string);
   assertOwnShipment(row, user);
   assertStatus(row, ["en_route"]);
-  await sql`UPDATE shipments SET status = 'at_warehouse', arrived_at = now() WHERE id = ${row.id}`;
+  await updateShipment(row.id, { status: "at_warehouse", arrived_at: now() });
   await audit(row.id, user, "arrived");
   res.json(await respond(row.id, user));
 });
@@ -219,7 +232,7 @@ const scanSchema = z.union([
 async function recordFailedCode(row: ShipmentRow, user: AuthUser): Promise<HttpError> {
   const attempts = row.failed_attempts + 1;
   const locked = attempts >= config.maxCodeAttempts;
-  await sql`UPDATE shipments SET failed_attempts = ${attempts}, locked = ${locked} WHERE id = ${row.id}`;
+  await updateShipment(row.id, { failed_attempts: attempts, locked });
   await audit(row.id, user, locked ? "scan_locked" : "scan_failed_code", { attempts });
   return new HttpError(
     locked ? 423 : 400,
@@ -254,9 +267,10 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, async (req, r
     row = found;
   } else {
     code = body.code;
-    const candidates = await sql<ShipmentRow[]>`
-      ${SHIPMENT_SELECT}
-      WHERE s.status IN ('en_route','at_warehouse') AND NOT s.locked AND s.totp_secret IS NOT NULL`;
+    const candidates = shipmentRows(must(
+      await selectShipments()
+        .in("status", ["en_route", "at_warehouse"]).eq("locked", false).not("totp_secret", "is", null),
+    ));
     const matches = candidates.filter((r) => matchTotp(r.totp_secret!, code) !== null);
     if (matches.length === 0) {
       await audit(null, user, "lookup_failed");
@@ -291,7 +305,7 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, async (req, r
     await audit(row.id, user, "scan_replayed", { step });
     throw new HttpError(409, "This code has already been used. Wait for the driver's next code (max 30 seconds).");
   }
-  await sql`UPDATE shipments SET last_totp_step = ${step}, failed_attempts = 0 WHERE id = ${row.id}`;
+  await updateShipment(row.id, { last_totp_step: step, failed_attempts: 0 });
 
   const driver = await getDriver(row.driver_id);
   const mismatches = pass ? comparePass(pass, row, driver) : [];
@@ -351,13 +365,11 @@ shipmentsRouter.post("/:id/verify", requireRole("clerk"), verifyLimiter, async (
 
   // Success: the pass is retired so it can't be used again.
   const dock = body.dockNumber || "Dock 1";
-  await sql.begin(async (tx) => {
-    await tx`
-      UPDATE shipments SET status = 'verified', verified_at = now(), arrived_at = COALESCE(arrived_at, now()),
-        dock_number = ${dock}, verification_notes = ${body.notes ?? null}, totp_secret = NULL, last_totp_step = NULL
-      WHERE id = ${row.id}`;
-    await audit(row.id, user, "verified", { dockNumber: dock }, tx);
+  await updateShipment(row.id, {
+    status: "verified", verified_at: now(), arrived_at: row.arrived_at ?? now(),
+    dock_number: dock, verification_notes: body.notes ?? null, totp_secret: null, last_totp_step: null,
   });
+  await audit(row.id, user, "verified", { dockNumber: dock });
   res.json(await respond(row.id, user));
 });
 
@@ -365,7 +377,7 @@ shipmentsRouter.post("/:id/release", requireRole("clerk"), async (req, res) => {
   const user = currentUser(req);
   const row = await getShipment(req.params.id as string);
   assertStatus(row, ["verified"]);
-  await sql`UPDATE shipments SET status = 'in_transit', released_at = now() WHERE id = ${row.id}`;
+  await updateShipment(row.id, { status: "in_transit", released_at: now() });
   await audit(row.id, user, "released");
   res.json(await respond(row.id, user));
 });

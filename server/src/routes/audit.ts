@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { sql } from "../db.js";
+import { must, supabase } from "../db.js";
 import { requireAuth, requireRole } from "../auth.js";
 
 export const auditRouter = Router();
@@ -7,10 +7,9 @@ auditRouter.use(requireAuth, requireRole("coordinator"));
 
 auditRouter.get("/", async (req, res) => {
   const shipmentId = typeof req.query.shipmentId === "string" ? req.query.shipmentId : null;
-  const rows = await sql`
-    SELECT * FROM audit_log
-    ${shipmentId ? sql`WHERE shipment_id = ${shipmentId}` : sql``}
-    ORDER BY id DESC LIMIT 200`;
+  let query = supabase.from("audit_log").select("*").order("id", { ascending: false }).limit(200);
+  if (shipmentId) query = query.eq("shipment_id", shipmentId);
+  const rows = must(await query);
   res.json(
     rows.map((r) => ({
       id: r.id,
