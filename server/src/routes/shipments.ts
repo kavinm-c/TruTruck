@@ -292,7 +292,7 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, async (req, r
     const found = await findShipment(pass.shipment.id);
     if (!found) {
       await audit(null, user, "scan_unknown_shipment", { shipmentId: pass.shipment.id });
-      throw new HttpError(404, "This pass refers to an order TruTruck has no record of.");
+      throw new HttpError(404, "This pass refers to an order TruckerTrust has no record of.");
     }
     row = found;
   } else {

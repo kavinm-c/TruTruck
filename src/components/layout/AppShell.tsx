@@ -24,7 +24,7 @@ export function AppShell() {
               <Truck className="size-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold leading-none">TruTruck</p>
+              <p className="text-sm font-semibold leading-none">TruckerTrust</p>
               <p className="text-xs text-muted-foreground">Dispatch &amp; pickup verification</p>
             </div>
           </div>
