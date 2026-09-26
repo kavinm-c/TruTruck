@@ -45,6 +45,8 @@ interface SeedShipment {
   arrived: string | null;
   verified: string | null;
   released: string | null;
+  cancelled?: string;
+  cancelReason?: string;
 }
 
 export async function seed({ reset = false } = {}) {
@@ -132,6 +134,12 @@ export async function seed({ reset = false } = {}) {
       { ...base, id: "shp-1007", ref: "TRU-1007", cargo: "18 pallets of frozen poultry",
         dropoff: "Cold Storage - 95 Nebo Rd, Hamilton, ON", date: isoDate(1), time: "06:00",
         status: "unassigned", declined: "drv-1" },
+
+      // Demo: dispatch revoked this one after Ollie had accepted it.
+      { ...base, id: "shp-1008", ref: "TRU-1008", cargo: "6 pallets of office furniture",
+        dropoff: "Head Office - 100 King St W, Toronto, ON", date: isoDate(1), time: "11:00",
+        status: "cancelled", carrier: "car-3", driver: "drv-3", accepted: minutesAgo(90),
+        cancelled: minutesAgo(30), cancelReason: "Customer postponed the delivery" },
     ];
     must(await supabase.from("shipments").insert(
       shipments.map((s) => ({
@@ -139,6 +147,7 @@ export async function seed({ reset = false } = {}) {
         pickup_date: s.date, pickup_time: s.time, status: s.status, carrier_id: s.carrier, driver_id: s.driver,
         totp_secret: s.secret, declined_by: s.declined, dock_number: s.dock, accepted_at: s.accepted,
         arrived_at: s.arrived, verified_at: s.verified, released_at: s.released,
+        ...(s.cancelled && { cancelled_at: s.cancelled, cancel_reason: s.cancelReason ?? null }),
       })),
     ));
 

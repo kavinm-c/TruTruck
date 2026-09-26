@@ -74,6 +74,11 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  /* Dashboard charts: validated categorical slots + recessive chrome. */
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -108,6 +113,10 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-grid: #2c2c2a;
+  --viz-axis: #383835;
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);

@@ -6,7 +6,8 @@ export type ShipmentStatus =
   | "en_route"
   | "at_warehouse"
   | "verified"
-  | "in_transit";
+  | "in_transit"
+  | "cancelled";
 
 export interface Carrier {
   id: string;
@@ -54,6 +55,8 @@ export interface Shipment {
   verifiedAt?: string;
   releasedAt?: string;
   verificationNotes?: string;
+  cancelledAt?: string;
+  cancelReason?: string;
   createdAt: string;
   failedAttempts?: number;
   locked?: boolean;
@@ -93,4 +96,25 @@ export const SHIPMENT_STATUS_LABEL: Record<ShipmentStatus, string> = {
   at_warehouse: "At warehouse",
   verified: "Verified",
   in_transit: "In transit",
+  cancelled: "Cancelled",
 };
+
+/** Display order for status filters. */
+export const SHIPMENT_STATUSES: ShipmentStatus[] = [
+  "unassigned",
+  "assigned",
+  "en_route",
+  "at_warehouse",
+  "verified",
+  "in_transit",
+  "cancelled",
+];
+
+/** Orders the coordinator can still revoke: anything that hasn't left the dock. */
+export const REVOCABLE_STATUSES: ShipmentStatus[] = [
+  "unassigned",
+  "assigned",
+  "en_route",
+  "at_warehouse",
+  "verified",
+];

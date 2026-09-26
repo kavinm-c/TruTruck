@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { BadgeCheck, IdCard, KeyRound, QrCode, ScanLine, ShieldAlert, ShieldCheck, Truck } from "lucide-react";
+import { BadgeCheck, CircleCheck, IdCard, KeyRound, QrCode, ScanLine, ShieldAlert, ShieldCheck, Truck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,11 +18,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { DriverAvatar } from "@/components/shared/DriverAvatar";
 import { QrScanner } from "@/components/clerk/QrScanner";
-import { formatPickup, timeAgo } from "@/lib/format";
+import { formatPickup, formatStamp, timeAgo } from "@/lib/format";
 import { ApiError } from "@/services/api";
 import type { ScanInput } from "@/services/verificationService";
 import { useAppStore, useRoleSession } from "@/store/useAppStore";
 import type { PassMismatch, ScanResult } from "@/types";
+
+/** Shown after a successful check-in until the clerk moves on to the next driver. */
+interface Admitted {
+  ref: string;
+  driverName: string;
+  photo?: string;
+  plate: string;
+  dock: string;
+  at: string;
+}
 
 interface ScanError {
   message: string;
@@ -55,6 +65,7 @@ export function ClerkView() {
   const [dockNumber, setDockNumber] = useState("");
   const [notes, setNotes] = useState("");
   const [verifying, setVerifying] = useState(false);
+  const [admitted, setAdmitted] = useState<Admitted | null>(null);
 
   const awaitingCheckIn = shipments.filter((s) => s.status === "at_warehouse");
   const recentlyProcessed = shipments.filter((s) => s.status === "verified" || s.status === "in_transit");
@@ -72,6 +83,7 @@ export function ClerkView() {
 
   async function handleScan(input: ScanInput) {
     reset();
+    setAdmitted(null);
     setScanning(true);
     try {
       setResult(await scanPass(input));
@@ -104,6 +116,14 @@ export function ClerkView() {
       });
       toast.success(`${result.shipment.referenceCode} verified`, {
         description: `${result.driver.name} admitted to ${dock}.`,
+      });
+      setAdmitted({
+        ref: result.shipment.referenceCode,
+        driverName: result.driver.name,
+        photo: result.driver.photo,
+        plate: result.driver.vehiclePlate,
+        dock,
+        at: new Date().toISOString(),
       });
       reset();
     } catch (e) {
@@ -179,6 +199,7 @@ export function ClerkView() {
                   <div className="font-medium">{shipment.referenceCode}</div>
                   <div className="text-xs text-muted-foreground">
                     {shipment.driverName} &middot; {shipment.dockNumber}
+                    {shipment.verifiedAt && ` · verified ${formatStamp(shipment.verifiedAt)}`}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -212,7 +233,33 @@ export function ClerkView() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {!result && (
+          {admitted && (
+            <div className="flex flex-col items-center gap-3 rounded-xl border border-emerald-600/30 bg-emerald-50 p-6 text-center dark:bg-emerald-500/10">
+              <div className="flex size-16 items-center justify-center rounded-full bg-emerald-600 text-white">
+                <CircleCheck className="size-9" strokeWidth={2.5} />
+              </div>
+              <div>
+                <p className="text-lg font-semibold text-emerald-900 dark:text-emerald-300">Driver verified</p>
+                <p className="text-sm text-emerald-900/80 dark:text-emerald-300/80">
+                  {admitted.ref} &middot; admitted to {admitted.dock} at {formatStamp(admitted.at)}
+                </p>
+              </div>
+              <div className="flex items-center gap-3 rounded-lg bg-background/70 px-3 py-2 text-left text-sm">
+                <DriverAvatar photo={admitted.photo} name={admitted.driverName} className="size-10" />
+                <div>
+                  <div className="font-medium">{admitted.driverName}</div>
+                  <div className="font-mono text-xs text-muted-foreground">{admitted.plate}</div>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">Dispatch now sees this order as verified by the clerk.</p>
+              <Button onClick={() => setAdmitted(null)}>
+                <ScanLine className="size-4" />
+                Verify next driver
+              </Button>
+            </div>
+          )}
+
+          {!result && !admitted && (
             <Tabs defaultValue="qr">
               <TabsList>
                 <TabsTrigger value="qr">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { BellRing, CalendarClock, Check, Flag, MapPin, Package, Warehouse, X } from "lucide-react";
+import { BellRing, CalendarClock, Check, CircleCheck, Flag, MapPin, Package, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -76,12 +76,13 @@ export function DriverView() {
   const me = drivers.find((d) => d.id === driverId);
   const carrier = carriers.find((c) => c.id === me?.carrierId);
 
-  const { requests, active, done } = useMemo(() => {
+  const { requests, active, done, cancelled } = useMemo(() => {
     const mine = shipments.filter((s) => s.driverId === driverId);
     return {
       requests: mine.filter((s) => s.status === "assigned"),
       active: mine.filter((s) => s.status === "en_route" || s.status === "at_warehouse"),
       done: mine.filter((s) => s.status === "verified" || s.status === "in_transit"),
+      cancelled: mine.filter((s) => s.status === "cancelled"),
     };
   }, [shipments, driverId]);
 
@@ -186,7 +187,7 @@ export function DriverView() {
         </section>
       )}
 
-      {requests.length === 0 && active.length === 0 && done.length === 0 && (
+      {requests.length === 0 && active.length === 0 && done.length === 0 && cancelled.length === 0 && (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
             No deliveries assigned right now.
@@ -246,9 +247,38 @@ export function DriverView() {
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3">
                   <OrderDetails shipment={shipment} />
-                  <div className="rounded-lg border border-emerald-600/20 bg-emerald-50 p-3 text-sm text-emerald-900 dark:bg-emerald-500/10 dark:text-emerald-300">
-                    Identity verified{shipment.dockNumber ? ` — proceed to ${shipment.dockNumber}` : ""}.
-                    {shipment.status === "in_transit" && " Load released for transit."}
+                  <div className="flex items-start gap-2 rounded-lg border border-emerald-600/20 bg-emerald-50 p-3 text-sm text-emerald-900 dark:bg-emerald-500/10 dark:text-emerald-300">
+                    <CircleCheck className="mt-0.5 size-4 shrink-0" />
+                    <span>
+                      Identity verified by the receiving clerk
+                      {shipment.dockNumber ? ` — proceed to ${shipment.dockNumber}` : ""}.
+                      {shipment.status === "in_transit" && " Load released for transit."}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {cancelled.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold">Cancelled by dispatch</h2>
+          <div className="grid gap-4 md:grid-cols-2">
+            {cancelled.map((shipment) => (
+              <Card key={shipment.id} className="opacity-80">
+                <CardHeader className="flex-row items-center justify-between space-y-0">
+                  <CardTitle className="text-base line-through decoration-muted-foreground/60">
+                    {shipment.referenceCode}
+                  </CardTitle>
+                  <StatusBadge status={shipment.status} />
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <OrderDetails shipment={shipment} />
+                  <div className="rounded-lg border border-red-600/20 bg-red-50 p-3 text-sm text-red-900 dark:bg-red-500/10 dark:text-red-300">
+                    Dispatch revoked this delivery{shipment.cancelReason ? `: ${shipment.cancelReason}` : ""}. Your
+                    pickup pass for it no longer works; don't go to the pickup.
                   </div>
                 </CardContent>
               </Card>

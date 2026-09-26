@@ -26,6 +26,7 @@ interface AppState {
   createOrder: (input: OrderInput) => Promise<Shipment>;
   assignShipment: (shipmentId: string, driverId: string) => Promise<void>;
   reissueCode: (shipmentId: string) => Promise<void>;
+  revokeShipment: (shipmentId: string, reason?: string) => Promise<void>;
 
   // driver
   acceptShipment: (shipmentId: string) => Promise<void>;
@@ -87,6 +88,7 @@ export const useAppStore = create<AppState>((set, get) => {
     createOrder: (input) => send("POST", "/shipments", input),
     assignShipment: (id, driverId) => send("POST", `/shipments/${id}/assign`, { driverId }),
     reissueCode: (id) => send("POST", `/shipments/${id}/reissue-code`),
+    revokeShipment: (id, reason) => send("POST", `/shipments/${id}/revoke`, { reason }),
 
     acceptShipment: (id) => send("POST", `/shipments/${id}/accept`),
     declineShipment: (id) => send("POST", `/shipments/${id}/decline`),

@@ -1,3 +1,4 @@
+import { CircleCheck, CircleX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { SHIPMENT_STATUS_LABEL, type ShipmentStatus } from "@/types";
@@ -10,11 +11,14 @@ const STATUS_CLASSES: Record<ShipmentStatus, string> = {
     "border-transparent bg-violet-100 text-violet-800 dark:bg-violet-500/15 dark:text-violet-300",
   verified: "border-transparent bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300",
   in_transit: "border-transparent bg-slate-800 text-slate-50 dark:bg-slate-200 dark:text-slate-900",
+  cancelled: "border-transparent bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-300",
 };
 
 export function StatusBadge({ status }: { status: ShipmentStatus }) {
   return (
     <Badge variant="outline" className={cn("font-medium", STATUS_CLASSES[status])}>
+      {status === "verified" && <CircleCheck className="size-3.5" aria-hidden />}
+      {status === "cancelled" && <CircleX className="size-3.5" aria-hidden />}
       {SHIPMENT_STATUS_LABEL[status]}
     </Badge>
   );

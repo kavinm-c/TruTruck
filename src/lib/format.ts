@@ -22,3 +22,11 @@ export function timeAgo(iso: string): string {
   const hours = Math.round(minutes / 60);
   return hours < 24 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
 }
+
+/** ISO timestamp -> "1:05 PM" today, otherwise "Sep 25, 1:05 PM". */
+export function formatStamp(iso: string): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+}

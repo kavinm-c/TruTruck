@@ -182,6 +182,36 @@ shipmentsRouter.post("/:id/reissue-code", requireRole("coordinator"), async (req
   res.json(await respond(row.id, user));
 });
 
+// Orders can be revoked any time before the load leaves the dock.
+const REVOCABLE: ShipmentStatus[] = ["unassigned", "assigned", "en_route", "at_warehouse", "verified"];
+const revokeSchema = z.object({ reason: z.string().trim().max(200).optional() });
+
+/** Cancel an order. The driver's pass stops working immediately. */
+shipmentsRouter.post("/:id/revoke", requireRole("coordinator"), async (req, res) => {
+  const user = currentUser(req);
+  const { reason } = revokeSchema.parse(req.body ?? {});
+  const row = await getShipment(req.params.id as string);
+  if (row.status === "cancelled") throw new HttpError(409, `${row.reference_code} is already cancelled.`);
+  if (row.status === "in_transit") {
+    throw new HttpError(409, `${row.reference_code} has already left the dock and can't be revoked.`);
+  }
+  assertStatus(row, REVOCABLE);
+
+  try {
+    await updateShipment(row.id, {
+      status: "cancelled", cancelled_at: now(), cancel_reason: reason || null,
+      totp_secret: null, last_totp_step: null, locked: false, failed_attempts: 0,
+    });
+  } catch (e) {
+    // Most likely the database predates the 'cancelled' status.
+    console.error(e);
+    throw new HttpError(503, "The database needs an update before orders can be revoked. " +
+      "Run server/migrations/002_revoke_orders.sql in the Supabase SQL Editor.");
+  }
+  await audit(row.id, user, "revoked", { previousStatus: row.status, reason: reason || null });
+  res.json(await respond(row.id, user));
+});
+
 // ---------- driver ----------
 
 shipmentsRouter.post("/:id/accept", requireRole("driver"), async (req, res) => {
@@ -288,6 +318,10 @@ shipmentsRouter.post("/scan", requireRole("clerk"), verifyLimiter, async (req, r
   if (row.status === "verified" || row.status === "in_transit") {
     await audit(row.id, user, "scan_after_checkin");
     throw new HttpError(409, `${row.reference_code} has already been checked in. This pass is no longer valid.`);
+  }
+  if (row.status === "cancelled") {
+    await audit(row.id, user, "scan_cancelled_order");
+    throw new HttpError(409, `${row.reference_code} was cancelled by dispatch. Do NOT release the load.`);
   }
   if (row.status === "unassigned") {
     throw new HttpError(409, `${row.reference_code} has no driver assigned. This pass is no longer valid.`);

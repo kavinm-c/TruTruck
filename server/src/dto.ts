@@ -35,6 +35,8 @@ export function shipmentDto(row: ShipmentRow, user: AuthUser) {
     verifiedAt: row.verified_at ?? undefined,
     releasedAt: row.released_at ?? undefined,
     verificationNotes: row.verification_notes ?? undefined,
+    cancelledAt: row.cancelled_at ?? undefined,
+    cancelReason: row.cancel_reason ?? undefined,
     createdAt: row.created_at,
     ...(user.role !== "driver" && {
       failedAttempts: row.failed_attempts,

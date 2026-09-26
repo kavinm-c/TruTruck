@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS shipments (
   pickup_date        TEXT NOT NULL,
   pickup_time        TEXT NOT NULL,
   status             TEXT NOT NULL CHECK (status IN
-                       ('unassigned','assigned','en_route','at_warehouse','verified','in_transit')),
+                       ('unassigned','assigned','en_route','at_warehouse','verified','in_transit','cancelled')),
   -- Constraint names are referenced by the API's joins (supabase-js embedding).
   carrier_id         TEXT CONSTRAINT shipments_carrier_id_fkey REFERENCES carriers(id),
   driver_id          TEXT CONSTRAINT shipments_driver_id_fkey REFERENCES drivers(id),
@@ -48,8 +48,17 @@ CREATE TABLE IF NOT EXISTS shipments (
   verified_at        TIMESTAMPTZ,
   released_at        TIMESTAMPTZ,
   verification_notes TEXT,
+  cancelled_at       TIMESTAMPTZ,
+  cancel_reason      TEXT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Migration for databases created before orders could be revoked (safe to re-run).
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS cancelled_at  TIMESTAMPTZ;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+ALTER TABLE shipments DROP CONSTRAINT IF EXISTS shipments_status_check;
+ALTER TABLE shipments ADD CONSTRAINT shipments_status_check CHECK (status IN
+  ('unassigned','assigned','en_route','at_warehouse','verified','in_transit','cancelled'));
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

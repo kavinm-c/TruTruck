@@ -4,6 +4,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { config } from "./config.js";
 import { seed } from "./seed.js";
+import { warnIfMigrationPending } from "./db.js";
 import { errorHandler } from "./errors.js";
 import { authRouter } from "./routes/auth.js";
 import { referenceRouter } from "./routes/reference.js";
@@ -12,6 +13,7 @@ import { driversRouter } from "./routes/drivers.js";
 import { auditRouter } from "./routes/audit.js";
 
 await seed(); // creates tables; loads demo data only if the DB is empty
+await warnIfMigrationPending();
 
 const app = express();
 app.use(helmet());

@@ -24,6 +24,17 @@ export function maybe<T>({ data, error }: Result<T | null>): T | null {
   return data;
 }
 
+/** Warns (without failing) when the revoke-orders migration hasn't been applied yet. */
+export async function warnIfMigrationPending() {
+  const { error } = await supabase.from("shipments").select("cancelled_at").limit(1);
+  if (error) {
+    console.warn(
+      "[db] Revoking orders needs a schema update. Paste server/migrations/002_revoke_orders.sql " +
+        "into Supabase > SQL Editor and run it.",
+    );
+  }
+}
+
 /** Fails fast with setup instructions if server/schema.sql hasn't been run yet. */
 export async function assertSchema() {
   const { error } = await supabase.from("audit_log").select("id").limit(1);
@@ -78,6 +89,8 @@ export interface ShipmentRow {
   verified_at: string | null;
   released_at: string | null;
   verification_notes: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
   created_at: string;
   // Joined for display.
   driver_name: string | null;
@@ -118,4 +131,5 @@ export type ShipmentStatus =
   | "en_route"
   | "at_warehouse"
   | "verified"
-  | "in_transit";
+  | "in_transit"
+  | "cancelled";

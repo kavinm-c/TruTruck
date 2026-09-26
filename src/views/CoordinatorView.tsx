@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { PackagePlus, PackageSearch, Pencil, UserPlus } from "lucide-react";
+import { Ban, CircleCheck, PackagePlus, PackageSearch, Pencil, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -17,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -32,9 +34,18 @@ import { DriverAvatar } from "@/components/shared/DriverAvatar";
 import { DriverDialog } from "@/components/coordinator/DriverDialog";
 import { DriverSelect } from "@/components/coordinator/DriverSelect";
 import { OrderDialog } from "@/components/coordinator/OrderDialog";
-import { formatPickup, shortPlace } from "@/lib/format";
+import { Dashboard } from "@/components/coordinator/Dashboard";
+import { formatPickup, formatStamp, shortPlace } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { useAppStore, useRoleSession } from "@/store/useAppStore";
-import type { Shipment, Driver } from "@/types";
+import {
+  REVOCABLE_STATUSES,
+  SHIPMENT_STATUS_LABEL,
+  SHIPMENT_STATUSES,
+  type Driver,
+  type Shipment,
+  type ShipmentStatus,
+} from "@/types";
 
 export function CoordinatorView() {
   useRoleSession("coordinator");
@@ -43,6 +54,19 @@ export function CoordinatorView() {
   const drivers = useAppStore((s) => s.drivers);
   const assignShipment = useAppStore((s) => s.assignShipment);
   const reissueCode = useAppStore((s) => s.reissueCode);
+  const revokeShipment = useAppStore((s) => s.revokeShipment);
+
+  // Status filter lives in the URL (?status=verified) so it survives refreshes.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusParam = searchParams.get("status");
+  const statusFilter: ShipmentStatus | "all" = SHIPMENT_STATUSES.includes(statusParam as ShipmentStatus)
+    ? (statusParam as ShipmentStatus)
+    : "all";
+  function setStatusFilter(status: ShipmentStatus | "all") {
+    setSearchParams(status === "all" ? {} : { status }, { replace: true });
+  }
+  const visibleShipments =
+    statusFilter === "all" ? shipments : shipments.filter((s) => s.status === statusFilter);
 
   const [orderOpen, setOrderOpen] = useState(false);
   const [driverDialog, setDriverDialog] = useState<{ open: boolean; driver: Driver | null }>({
@@ -52,6 +76,8 @@ export function CoordinatorView() {
   const [assigning, setAssigning] = useState<Shipment | null>(null);
   const [driverId, setDriverId] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [revoking, setRevoking] = useState<Shipment | null>(null);
+  const [revokeReason, setRevokeReason] = useState("");
 
   function openAssignDialog(shipment: Shipment) {
     setAssigning(shipment);
@@ -86,6 +112,29 @@ export function CoordinatorView() {
     }
   }
 
+  function openRevokeDialog(shipment: Shipment) {
+    setRevoking(shipment);
+    setRevokeReason("");
+  }
+
+  async function confirmRevoke() {
+    if (!revoking) return;
+    setSubmitting(true);
+    try {
+      await revokeShipment(revoking.id, revokeReason.trim() || undefined);
+      toast.success(`${revoking.referenceCode} revoked`, {
+        description: revoking.driverName
+          ? `${revoking.driverName}'s pass no longer works.`
+          : "The order is now marked as cancelled.",
+      });
+      setRevoking(null);
+    } catch (e) {
+      toast.error("Could not revoke order", { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   const unassignedCount = shipments.filter((s) => s.status === "unassigned").length;
   const awaitingCount = shipments.filter((s) => s.status === "assigned").length;
 
@@ -100,12 +149,17 @@ export function CoordinatorView() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setDriverDialog({ open: true, driver: null })}>
-            <UserPlus className="size-4" />
+          <Button
+            variant="outline"
+            size="lg"
+            className="h-11 px-5 text-base"
+            onClick={() => setDriverDialog({ open: true, driver: null })}
+          >
+            <UserPlus className="size-5" />
             Add driver
           </Button>
-          <Button onClick={() => setOrderOpen(true)}>
-            <PackagePlus className="size-4" />
+          <Button size="lg" className="h-11 px-5 text-base" onClick={() => setOrderOpen(true)}>
+            <PackagePlus className="size-5" />
             New delivery order
           </Button>
         </div>
@@ -115,6 +169,7 @@ export function CoordinatorView() {
         <TabsList>
           <TabsTrigger value="orders">Delivery orders ({shipments.length})</TabsTrigger>
           <TabsTrigger value="drivers">Drivers ({drivers.length})</TabsTrigger>
+          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orders">
@@ -123,7 +178,34 @@ export function CoordinatorView() {
               <CardTitle className="text-base">Delivery orders</CardTitle>
               <CardDescription>Create orders, assign drivers, and track them to the dock.</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Filter orders by status">
+                {(["all", ...SHIPMENT_STATUSES] as const).map((status) => {
+                  const count =
+                    status === "all" ? shipments.length : shipments.filter((s) => s.status === status).length;
+                  const active = statusFilter === status;
+                  return (
+                    <Button
+                      key={status}
+                      size="sm"
+                      variant={active ? "default" : "outline"}
+                      aria-pressed={active}
+                      onClick={() => setStatusFilter(status)}
+                    >
+                      {status === "all" ? "All" : SHIPMENT_STATUS_LABEL[status]}
+                      <span
+                        className={cn(
+                          "rounded-full px-1.5 text-[0.7rem] tabular-nums",
+                          active ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground",
+                        )}
+                      >
+                        {count}
+                      </span>
+                    </Button>
+                  );
+                })}
+              </div>
+
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -136,9 +218,18 @@ export function CoordinatorView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {shipments.map((shipment) => {
+                  {visibleShipments.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                        No {statusFilter === "all" ? "" : `${SHIPMENT_STATUS_LABEL[statusFilter].toLowerCase()} `}
+                        orders.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {visibleShipments.map((shipment) => {
                     const driver = drivers.find((d) => d.id === shipment.driverId);
                     const canAssign = ["unassigned", "assigned", "en_route"].includes(shipment.status);
+                    const canRevoke = REVOCABLE_STATUSES.includes(shipment.status);
                     return (
                       <TableRow key={shipment.id}>
                         <TableCell>
@@ -160,6 +251,26 @@ export function CoordinatorView() {
                           <StatusBadge status={shipment.status} />
                           {shipment.locked && (
                             <div className="mt-1 text-xs font-medium text-destructive">Pass locked</div>
+                          )}
+                          {shipment.status === "verified" && (
+                            <div className="mt-1 flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+                              <CircleCheck className="size-3.5 shrink-0" />
+                              Verified by receiving clerk
+                              {shipment.dockNumber && ` · ${shipment.dockNumber}`}
+                              {shipment.verifiedAt && ` · ${formatStamp(shipment.verifiedAt)}`}
+                            </div>
+                          )}
+                          {shipment.status === "in_transit" && shipment.verifiedAt && (
+                            <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                              <CircleCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                              Clerk verified {formatStamp(shipment.verifiedAt)}
+                            </div>
+                          )}
+                          {shipment.status === "cancelled" && (
+                            <div className="mt-1 max-w-48 text-xs text-muted-foreground">
+                              Revoked{shipment.cancelledAt && ` ${formatStamp(shipment.cancelledAt)}`}
+                              {shipment.cancelReason && ` · ${shipment.cancelReason}`}
+                            </div>
                           )}
                           {shipment.status === "unassigned" && shipment.declinedBy && (
                             <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
@@ -194,6 +305,17 @@ export function CoordinatorView() {
                                 onClick={() => openAssignDialog(shipment)}
                               >
                                 {driver ? "Reassign" : "Assign driver"}
+                              </Button>
+                            )}
+                            {canRevoke && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => openRevokeDialog(shipment)}
+                              >
+                                <Ban className="size-3.5" />
+                                Revoke
                               </Button>
                             )}
                           </div>
@@ -267,6 +389,10 @@ export function CoordinatorView() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="dashboard">
+          <Dashboard />
+        </TabsContent>
       </Tabs>
 
       <OrderDialog open={orderOpen} onOpenChange={setOrderOpen} />
@@ -275,6 +401,41 @@ export function CoordinatorView() {
         driver={driverDialog.driver}
         onOpenChange={(open) => setDriverDialog((d) => ({ ...d, open }))}
       />
+
+      <Dialog open={revoking !== null} onOpenChange={(open) => !open && setRevoking(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="size-4 text-destructive" />
+              Revoke {revoking?.referenceCode}?
+            </DialogTitle>
+            <DialogDescription>
+              The order is marked as cancelled and can't be reopened.
+              {revoking?.driverName && ` ${revoking.driverName}'s pickup pass stops working immediately.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="revoke-reason">Reason (optional)</Label>
+            <Input
+              id="revoke-reason"
+              placeholder="e.g. Customer postponed the delivery"
+              maxLength={200}
+              value={revokeReason}
+              onChange={(e) => setRevokeReason(e.target.value)}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRevoking(null)}>
+              Keep order
+            </Button>
+            <Button variant="destructive" disabled={submitting} onClick={confirmRevoke}>
+              {submitting ? "Revoking…" : "Revoke order"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={assigning !== null} onOpenChange={(open) => !open && setAssigning(null)}>
         <DialogContent>
