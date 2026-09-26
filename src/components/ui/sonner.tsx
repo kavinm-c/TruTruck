@@ -14,7 +14,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       closeButton
       icons={{
         success: (
-          <CircleCheckIcon className="size-4" />
+          <CircleCheckIcon className="size-4 text-emerald-600 dark:text-emerald-400" />
         ),
         info: (
           <InfoIcon className="size-4" />
@@ -44,6 +44,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast: "cn-toast",
+          // Sonner greys out the second line by default, which is hard to read.
+          description: "text-popover-foreground! opacity-100!",
         },
       }}
       {...props}

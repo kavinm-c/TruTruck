@@ -60,7 +60,7 @@ export function DriverView() {
         setDemoDrivers(list);
         setDriverId((current) => current || list[0]?.id || "");
       })
-      .catch(() => toast.error("Can'd reach the TruTruck API. Is the server running?"));
+      .catch(() => toast.error("Can't reach the TruckerTrust API. Is the server running?"));
   }, []);
 
   useRoleSession("driver", driverId || undefined);

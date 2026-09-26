@@ -37,10 +37,10 @@ export function parsePass(raw: string): DriverPass {
   try {
     json = JSON.parse(raw);
   } catch {
-    throw new HttpError(400, "That QR code isn't a TruTruck driver pass.");
+    throw new HttpError(400, "That QR code isn't a TruckerTrust driver pass.");
   }
   const result = passSchema.safeParse(json);
-  if (!result.success) throw new HttpError(400, "That QR code isn't a TruTruck driver pass.");
+  if (!result.success) throw new HttpError(400, "That QR code isn't a TruckerTrust driver pass.");
   return result.data;
 }
 

@@ -1,7 +1,21 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Ban, CircleCheck, PackagePlus, PackageSearch, Pencil, UserPlus } from "lucide-react";
+import {
+  Ban,
+  CalendarClock,
+  Check,
+  ChevronDown,
+  CircleCheck,
+  Ellipsis,
+  Flag,
+  Info,
+  MapPin,
+  PackagePlus,
+  PackageSearch,
+  Pencil,
+  UserPlus,
+  UserRoundPen,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,6 +32,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -35,17 +56,72 @@ import { DriverDialog } from "@/components/coordinator/DriverDialog";
 import { DriverSelect } from "@/components/coordinator/DriverSelect";
 import { OrderDialog } from "@/components/coordinator/OrderDialog";
 import { Dashboard } from "@/components/coordinator/Dashboard";
-import { formatPickup, formatStamp, shortPlace } from "@/lib/format";
+import { formatPickup, formatStamp } from "@/lib/format";
+import { STATUS_GROUPS, statusGroup, type StatusGroup } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { useAppStore, useRoleSession } from "@/store/useAppStore";
 import {
   REVOCABLE_STATUSES,
   SHIPMENT_STATUS_LABEL,
-  SHIPMENT_STATUSES,
   type Driver,
   type Shipment,
   type ShipmentStatus,
 } from "@/types";
+
+type StatusFilter = "all" | StatusGroup | ShipmentStatus;
+
+function CountPill({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-1.5 text-[0.7rem] tabular-nums",
+        active ? "bg-white/25" : "bg-foreground/10",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function FilterItem({
+  selected,
+  count,
+  onSelect,
+  children,
+}: {
+  selected: boolean;
+  count: number;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <DropdownMenuItem onSelect={onSelect} className={cn(selected && "font-medium")}>
+      <Check className={cn("size-3.5", !selected && "invisible")} aria-hidden />
+      {children}
+      <span className="ml-auto pl-4 text-xs text-muted-foreground tabular-nums">{count}</span>
+    </DropdownMenuItem>
+  );
+}
+
+function InfoRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof MapPin;
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <div>
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div>{value || "—"}</div>
+      </div>
+    </div>
+  );
+}
 
 export function CoordinatorView() {
   useRoleSession("coordinator");
@@ -56,17 +132,17 @@ export function CoordinatorView() {
   const reissueCode = useAppStore((s) => s.reissueCode);
   const revokeShipment = useAppStore((s) => s.revokeShipment);
 
-  // Status filter lives in the URL (?status=verified) so it survives refreshes.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const statusParam = searchParams.get("status");
-  const statusFilter: ShipmentStatus | "all" = SHIPMENT_STATUSES.includes(statusParam as ShipmentStatus)
-    ? (statusParam as ShipmentStatus)
-    : "all";
-  function setStatusFilter(status: ShipmentStatus | "all") {
-    setSearchParams(status === "all" ? {} : { status }, { replace: true });
-  }
-  const visibleShipments =
-    statusFilter === "all" ? shipments : shipments.filter((s) => s.status === statusFilter);
+  // Everything, one overall stage, or one exact status within a stage. Every page load opens on
+  // unassigned orders, since those are the ones waiting on the coordinator.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("unassigned");
+  const matchesFilter = (s: Shipment, filter: StatusFilter) =>
+    filter === "all" || s.status === filter || statusGroup(s.status).id === filter;
+  const countFor = (filter: StatusFilter) => shipments.filter((s) => matchesFilter(s, filter)).length;
+  const visibleShipments = shipments.filter((s) => matchesFilter(s, statusFilter));
+  const filterLabel =
+    statusFilter === "all"
+      ? ""
+      : (STATUS_GROUPS.find((g) => g.id === statusFilter)?.label ?? SHIPMENT_STATUS_LABEL[statusFilter as ShipmentStatus]);
 
   const [orderOpen, setOrderOpen] = useState(false);
   const [driverDialog, setDriverDialog] = useState<{ open: boolean; driver: Driver | null }>({
@@ -77,6 +153,7 @@ export function CoordinatorView() {
   const [driverId, setDriverId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [revoking, setRevoking] = useState<Shipment | null>(null);
+  const [viewing, setViewing] = useState<Shipment | null>(null);
   const [revokeReason, setRevokeReason] = useState("");
 
   function openAssignDialog(shipment: Shipment) {
@@ -180,49 +257,74 @@ export function CoordinatorView() {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="flex flex-wrap gap-2" role="group" aria-label="Filter orders by status">
-                {(["all", ...SHIPMENT_STATUSES] as const).map((status) => {
-                  const count =
-                    status === "all" ? shipments.length : shipments.filter((s) => s.status === status).length;
-                  const active = statusFilter === status;
+                <Button
+                  size="sm"
+                  variant={statusFilter === "all" ? "default" : "outline"}
+                  aria-pressed={statusFilter === "all"}
+                  onClick={() => setStatusFilter("all")}
+                >
+                  All
+                  <CountPill active={statusFilter === "all"}>{shipments.length}</CountPill>
+                </Button>
+
+                {STATUS_GROUPS.map((group) => {
+                  const exact = group.statuses.find((s) => s === statusFilter);
+                  const active = statusFilter === group.id || exact !== undefined;
                   return (
-                    <Button
-                      key={status}
-                      size="sm"
-                      variant={active ? "default" : "outline"}
-                      aria-pressed={active}
-                      onClick={() => setStatusFilter(status)}
-                    >
-                      {status === "all" ? "All" : SHIPMENT_STATUS_LABEL[status]}
-                      <span
-                        className={cn(
-                          "rounded-full px-1.5 text-[0.7rem] tabular-nums",
-                          active ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground",
-                        )}
-                      >
-                        {count}
-                      </span>
-                    </Button>
+                    <DropdownMenu key={group.id}>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-pressed={active}
+                          className={active ? group.solid : group.soft}
+                        >
+                          {!active && <span className={cn("size-2 rounded-full", group.dot)} aria-hidden />}
+                          {group.label}
+                          {exact && `: ${SHIPMENT_STATUS_LABEL[exact]}`}
+                          <CountPill active={active}>{countFor(exact ?? group.id)}</CountPill>
+                          <ChevronDown className="size-3.5 opacity-70" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <FilterItem
+                          selected={statusFilter === group.id}
+                          count={countFor(group.id)}
+                          onSelect={() => setStatusFilter(group.id)}
+                        >
+                          All {group.label.toLowerCase()}
+                        </FilterItem>
+                        <DropdownMenuSeparator />
+                        {group.statuses.map((status) => (
+                          <FilterItem
+                            key={status}
+                            selected={statusFilter === status}
+                            count={countFor(status)}
+                            onSelect={() => setStatusFilter(status)}
+                          >
+                            <span className={cn("size-2 rounded-full", group.dot)} aria-hidden />
+                            {SHIPMENT_STATUS_LABEL[status]}
+                          </FilterItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   );
                 })}
               </div>
 
-              <Table>
+              <Table className="text-base">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Order</TableHead>
-                    <TableHead>Pickup &rarr; drop-off</TableHead>
-                    <TableHead>Pickup time</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Driver</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visibleShipments.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                        No {statusFilter === "all" ? "" : `${SHIPMENT_STATUS_LABEL[statusFilter].toLowerCase()} `}
-                        orders.
+                      <TableCell colSpan={3} className="py-8 text-center text-muted-foreground">
+                        No {filterLabel && `${filterLabel.toLowerCase()} `}orders.
                       </TableCell>
                     </TableRow>
                   )}
@@ -233,90 +335,105 @@ export function CoordinatorView() {
                     return (
                       <TableRow key={shipment.id}>
                         <TableCell>
-                          <div className="font-medium">{shipment.referenceCode}</div>
-                          <div className="max-w-48 truncate text-xs text-muted-foreground">
+                          <div className="text-lg font-medium">{shipment.referenceCode}</div>
+                          <div className="max-w-56 truncate text-muted-foreground">
                             {shipment.cargo || "—"}
                           </div>
-                        </TableCell>
-                        <TableCell
-                          className="max-w-64 whitespace-normal text-xs text-muted-foreground"
-                          title={`${shipment.pickupLocation} → ${shipment.dropoffLocation}`}
-                        >
-                          {shortPlace(shipment.pickupLocation)} &rarr; {shortPlace(shipment.dropoffLocation)}
-                        </TableCell>
-                        <TableCell className="text-xs whitespace-nowrap">
-                          {formatPickup(shipment.pickupDate, shipment.pickupTime)}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-1.5"
+                            aria-label={`Pickup and drop-off details for ${shipment.referenceCode}`}
+                            onClick={() => setViewing(shipment)}
+                          >
+                            <Info />
+                            Info
+                          </Button>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={shipment.status} />
+                          <StatusBadge status={shipment.status} className="h-6 px-2.5 text-sm [&>svg]:size-3.5!" />
                           {shipment.locked && (
-                            <div className="mt-1 text-xs font-medium text-destructive">Pass locked</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <span className="text-base font-medium text-destructive">Pass locked</span>
+                              <Button size="xs" variant="destructive" onClick={() => handleReissue(shipment)}>
+                                Reissue pass
+                              </Button>
+                            </div>
                           )}
                           {shipment.status === "verified" && (
-                            <div className="mt-1 flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
-                              <CircleCheck className="size-3.5 shrink-0" />
+                            <div className="mt-1 flex items-center gap-1 text-base text-emerald-700 dark:text-emerald-400">
+                              <CircleCheck className="size-4 shrink-0" />
                               Verified by receiving clerk
                               {shipment.dockNumber && ` · ${shipment.dockNumber}`}
                               {shipment.verifiedAt && ` · ${formatStamp(shipment.verifiedAt)}`}
                             </div>
                           )}
                           {shipment.status === "in_transit" && shipment.verifiedAt && (
-                            <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                              <CircleCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                            <div className="mt-1 flex items-center gap-1 text-base text-muted-foreground">
+                              <CircleCheck className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                               Clerk verified {formatStamp(shipment.verifiedAt)}
                             </div>
                           )}
                           {shipment.status === "cancelled" && (
-                            <div className="mt-1 max-w-48 text-xs text-muted-foreground">
+                            <div className="mt-1 max-w-56 text-base text-muted-foreground">
                               Revoked{shipment.cancelledAt && ` ${formatStamp(shipment.cancelledAt)}`}
                               {shipment.cancelReason && ` · ${shipment.cancelReason}`}
                             </div>
                           )}
                           {shipment.status === "unassigned" && shipment.declinedBy && (
-                            <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                            <div className="mt-1 text-base text-amber-700 dark:text-amber-400">
                               Declined by {shipment.declinedBy}
                             </div>
                           )}
                         </TableCell>
-                        <TableCell className="text-xs">
-                          {driver ? (
-                            <div className="flex items-center gap-2">
-                              <DriverAvatar photo={driver.photo} name={driver.name} className="size-7 rounded-md" />
-                              <div>
-                                <div className="font-medium text-foreground">{driver.name}</div>
-                                <div className="text-muted-foreground">{shipment.carrierName}</div>
+                        <TableCell>
+                          <div className="flex items-center justify-between gap-3">
+                            {driver ? (
+                              <div className="flex items-center gap-2.5">
+                                <DriverAvatar photo={driver.photo} name={driver.name} className="size-9 rounded-md" />
+                                <div>
+                                  <div className="font-medium text-foreground">{driver.name}</div>
+                                  <div className="text-muted-foreground">{shipment.carrierName}</div>
+                                </div>
                               </div>
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">Unassigned</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            {shipment.locked && (
-                              <Button size="sm" variant="destructive" onClick={() => handleReissue(shipment)}>
-                                Reissue pass
+                            ) : canAssign ? (
+                              <Button onClick={() => openAssignDialog(shipment)}>
+                                Assign driver
                               </Button>
+                            ) : (
+                              <span className="text-muted-foreground">Unassigned</span>
                             )}
-                            {canAssign && (
-                              <Button
-                                size="sm"
-                                variant={driver ? "outline" : "default"}
-                                onClick={() => openAssignDialog(shipment)}
-                              >
-                                {driver ? "Reassign" : "Assign driver"}
-                              </Button>
-                            )}
-                            {canRevoke && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                onClick={() => openRevokeDialog(shipment)}
-                              >
-                                <Ban className="size-3.5" />
-                                Revoke
-                              </Button>
+
+                            {((driver && canAssign) || canRevoke) && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    size="icon-sm"
+                                    variant="ghost"
+                                    className="shrink-0 text-muted-foreground"
+                                    aria-label={`More options for ${shipment.referenceCode}`}
+                                  >
+                                    <Ellipsis />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="min-w-40">
+                                  {driver && canAssign && (
+                                    <DropdownMenuItem onSelect={() => openAssignDialog(shipment)}>
+                                      <UserRoundPen />
+                                      Reassign driver
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canRevoke && (
+                                    <DropdownMenuItem
+                                      className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                                      onSelect={() => openRevokeDialog(shipment)}
+                                    >
+                                      <Ban />
+                                      Revoke order
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             )}
                           </div>
                         </TableCell>
@@ -401,6 +518,34 @@ export function CoordinatorView() {
         driver={driverDialog.driver}
         onOpenChange={(open) => setDriverDialog((d) => ({ ...d, open }))}
       />
+
+      <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Info className="size-4" />
+              {viewing?.referenceCode}
+            </DialogTitle>
+            <DialogDescription>{viewing?.cargo || "No cargo description"}</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-3 text-sm">
+            <InfoRow icon={MapPin} label="Pickup" value={viewing?.pickupLocation} />
+            <InfoRow icon={Flag} label="Drop-off" value={viewing?.dropoffLocation} />
+            <InfoRow
+              icon={CalendarClock}
+              label="Pickup time"
+              value={viewing && formatPickup(viewing.pickupDate, viewing.pickupTime)}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewing(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={revoking !== null} onOpenChange={(open) => !open && setRevoking(null)}>
         <DialogContent>

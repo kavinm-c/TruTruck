@@ -54,7 +54,7 @@ export async function request<T>(
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
   } catch {
-    throw new ApiError(0, "Can't reach the TruTruck API. Is the server running?");
+    throw new ApiError(0, "Can't reach the TruckerTrust API. Is the server running?");
   }
 
   if (res.status === 401 && !retried) {
