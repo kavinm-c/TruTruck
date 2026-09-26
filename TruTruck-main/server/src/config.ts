@@ -15,7 +15,9 @@ export const config = {
   jwtSecret: jwtSecret(),
   corsOrigin: (process.env.CORS_ORIGIN ?? "http://localhost:5173").split(","),
   dbPath: process.env.DB_PATH ?? "./trutruck.db",
-  codeTtlHours: Number(process.env.CODE_TTL_HOURS ?? 24),
+  totpStepSeconds: Number(process.env.TOTP_STEP_SECONDS ?? 30),
+  // Accept codes from this many 30s steps either side of now, to absorb clock drift.
+  totpWindow: Number(process.env.TOTP_WINDOW ?? 1),
   maxCodeAttempts: Number(process.env.MAX_CODE_ATTEMPTS ?? 5),
   demoLogin: (process.env.DEMO_LOGIN ?? "true") === "true",
 };

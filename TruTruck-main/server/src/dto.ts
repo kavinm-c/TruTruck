@@ -1,40 +1,47 @@
 import type { AuthUser } from "./auth.js";
 import type { CarrierRow, ShipmentRow, TruckerRow } from "./db.js";
 
-const CODE_VISIBLE_STATUSES = new Set(["assigned", "en_route", "at_warehouse"]);
+// The driver only gets the pass secret once they've accepted the delivery,
+// and loses it once the clerk has verified them at the dock.
+const PASS_VISIBLE_STATUSES = new Set(["en_route", "at_warehouse"]);
 
 /**
- * Shape a shipment for the caller's role. The verification code is ONLY
- * ever returned to the trucker assigned to that shipment. Coordinators and
- * clerks never see it, so the clerk has to get it from the driver in person.
+ * Shape a shipment for the caller's role. The TOTP secret is ONLY ever
+ * returned to the trucker assigned to that shipment. Coordinators and clerks
+ * never see it, so the clerk has to get the rotating code from the driver.
  */
 export function shipmentDto(row: ShipmentRow, user: AuthUser) {
   const isAssignedTrucker = user.role === "trucker" && row.trucker_id === user.truckerId;
   return {
     id: row.id,
     referenceCode: row.reference_code,
-    what: row.what,
-    origin: row.origin,
-    destination: row.destination,
+    cargo: row.cargo,
+    pickupLocation: row.pickup_location,
+    dropoffLocation: row.dropoff_location,
     pickupDate: row.pickup_date,
-    pickupWindow: row.pickup_window,
+    pickupTime: row.pickup_time,
     status: row.status,
     carrierId: row.carrier_id ?? undefined,
+    carrierName: row.carrier_name ?? undefined,
     truckerId: row.trucker_id ?? undefined,
-    verificationCode:
-      isAssignedTrucker && CODE_VISIBLE_STATUSES.has(row.status)
-        ? (row.verification_code ?? undefined)
+    driverName: row.driver_name ?? undefined,
+    totpSecret:
+      isAssignedTrucker && PASS_VISIBLE_STATUSES.has(row.status)
+        ? (row.totp_secret ?? undefined)
         : undefined,
-    codeExpiresAt: row.code_expires_at ?? undefined,
     dockNumber: row.dock_number ?? undefined,
-    acknowledgedAt: row.acknowledged_at ?? undefined,
+    acceptedAt: row.accepted_at ?? undefined,
     arrivedAt: row.arrived_at ?? undefined,
     verifiedAt: row.verified_at ?? undefined,
     releasedAt: row.released_at ?? undefined,
     verificationNotes: row.verification_notes ?? undefined,
+    createdAt: row.created_at,
     ...(user.role !== "trucker" && {
       failedAttempts: row.failed_attempts,
       locked: row.locked === 1,
+    }),
+    ...(user.role === "coordinator" && {
+      declinedBy: row.declined_by_name ?? undefined,
     }),
   };
 }
@@ -49,14 +56,15 @@ export function carrierDto(row: CarrierRow) {
   };
 }
 
-export function truckerDto(row: TruckerRow, user: AuthUser) {
+export function truckerDto(row: TruckerRow) {
   return {
     id: row.id,
     name: row.name,
     phone: row.phone,
+    email: row.email,
+    photo: row.photo ?? undefined,
     carrierId: row.carrier_id,
-    // Truckers don't need other drivers' licence numbers.
-    licenseNumber: user.role === "trucker" && row.id !== user.truckerId ? "" : row.license_number,
+    licenseNumber: row.license_number,
     vehiclePlate: row.vehicle_plate,
     vehicleDescription: row.vehicle_description,
   };

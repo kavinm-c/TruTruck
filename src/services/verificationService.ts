@@ -1,37 +1,42 @@
-import type { Shipment, Trucker } from "@/types";
+import { request, type Session } from "@/services/api";
+import type { ScanResult, Shipment } from "@/types";
+
+const CLERK: Session = { role: "clerk" };
+
+/** What the clerk captured: the raw QR text, or a 6-digit code typed by hand. */
+export type ScanInput = { qr: string } | { code: string };
 
 export interface VerificationRequest {
-  shipment: Shipment;
-  trucker: Trucker;
-  enteredCode: string;
+  shipmentId: string;
+  ticket: string;
   idMatches: boolean;
   vehicleMatches: boolean;
-}
-
-export interface VerificationResult {
-  approved: boolean;
-  reason?: string;
+  plateEntered: string;
+  dockNumber: string;
+  notes?: string;
 }
 
 /**
- * Stand-in for the real identity-verification API (planned backend).
- * Keeps the same request/response shape so the clerk view doesn't
- * need to change when this is swapped for a live fetch() call.
+ * Server checks the rotating TOTP code (30s, single-use, 5-attempt lockout)
+ * and, for QR scans, that the pass details match dispatch records. Returns the
+ * authoritative driver details plus a short-lived ticket for the verify step.
  */
-export async function verifyDriverIdentity(
-  request: VerificationRequest,
-): Promise<VerificationResult> {
-  const codeMatches = request.enteredCode.trim() === request.shipment.verificationCode;
+export function scanDriverPass(input: ScanInput): Promise<ScanResult> {
+  const body = "code" in input ? { code: input.code.trim() } : input;
+  return request<ScanResult>(CLERK, "/shipments/scan", { method: "POST", body });
+}
 
-  if (!codeMatches) {
-    return { approved: false, reason: "Verification code does not match this shipment." };
-  }
-  if (!request.idMatches) {
-    return { approved: false, reason: "Driver ID does not match the assigned trucker." };
-  }
-  if (!request.vehicleMatches) {
-    return { approved: false, reason: "Vehicle does not match the assigned plate/description." };
-  }
-
-  return { approved: true };
+/** Server re-checks the ticket, the ID/vehicle checks and the plate. */
+export function verifyDriverIdentity(req: VerificationRequest): Promise<Shipment> {
+  return request<Shipment>(CLERK, `/shipments/${req.shipmentId}/verify`, {
+    method: "POST",
+    body: {
+      ticket: req.ticket,
+      idMatches: req.idMatches,
+      vehicleMatches: req.vehicleMatches,
+      plateEntered: req.plateEntered,
+      dockNumber: req.dockNumber,
+      notes: req.notes,
+    },
+  });
 }

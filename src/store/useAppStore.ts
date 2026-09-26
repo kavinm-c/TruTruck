@@ -1,80 +1,115 @@
+import { useEffect } from "react";
 import { create } from "zustand";
-import { carriers, initialShipments, truckers } from "@/data/mockData";
-import type { Carrier, Shipment, Trucker } from "@/types";
-
-function generateVerificationCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
+import { request, type Session } from "@/services/api";
+import {
+  scanDriverPass,
+  verifyDriverIdentity,
+  type ScanInput,
+  type VerificationRequest,
+} from "@/services/verificationService";
+import type { Carrier, DriverInput, OrderInput, Role, ScanResult, Shipment, Trucker } from "@/types";
 
 interface AppState {
+  session: Session | null;
   shipments: Shipment[];
   carriers: Carrier[];
   truckers: Trucker[];
+  loading: boolean;
+  error: string | null;
 
-  assignShipment: (shipmentId: string, carrierId: string, truckerId: string) => void;
-  acknowledgeShipment: (shipmentId: string) => void;
-  markArrived: (shipmentId: string) => void;
-  verifyAndAdmit: (shipmentId: string, dockNumber: string, notes?: string) => void;
-  releaseForTransit: (shipmentId: string) => void;
+  setSession: (session: Session) => Promise<void>;
+  refresh: () => Promise<void>;
+
+  // coordinator
+  createDriver: (input: DriverInput) => Promise<Trucker>;
+  updateDriver: (id: string, input: Partial<DriverInput>) => Promise<Trucker>;
+  createOrder: (input: OrderInput) => Promise<Shipment>;
+  assignShipment: (shipmentId: string, truckerId: string) => Promise<void>;
+  reissueCode: (shipmentId: string) => Promise<void>;
+
+  // trucker
+  acceptShipment: (shipmentId: string) => Promise<void>;
+  declineShipment: (shipmentId: string) => Promise<void>;
+  markArrived: (shipmentId: string) => Promise<void>;
+
+  // clerk
+  scanPass: (input: ScanInput) => Promise<ScanResult>;
+  verifyAndAdmit: (req: VerificationRequest) => Promise<void>;
+  releaseForTransit: (shipmentId: string) => Promise<void>;
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  shipments: initialShipments,
-  carriers,
-  truckers,
+function requireSession(session: Session | null): Session {
+  if (!session) throw new Error("No active session");
+  return session;
+}
 
-  assignShipment: (shipmentId, carrierId, truckerId) =>
-    set((state) => ({
-      shipments: state.shipments.map((s) =>
-        s.id === shipmentId
-          ? {
-              ...s,
-              carrierId,
-              truckerId,
-              status: "assigned",
-              verificationCode: generateVerificationCode(),
-            }
-          : s,
-      ),
-    })),
+export const useAppStore = create<AppState>((set, get) => {
+  async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const result = await request<T>(requireSession(get().session), path, { method, body });
+    await get().refresh();
+    return result;
+  }
 
-  acknowledgeShipment: (shipmentId) =>
-    set((state) => ({
-      shipments: state.shipments.map((s) =>
-        s.id === shipmentId
-          ? { ...s, status: "en_route", acknowledgedAt: new Date().toISOString() }
-          : s,
-      ),
-    })),
+  return {
+    session: null,
+    shipments: [],
+    carriers: [],
+    truckers: [],
+    loading: false,
+    error: null,
 
-  markArrived: (shipmentId) =>
-    set((state) => ({
-      shipments: state.shipments.map((s) =>
-        s.id === shipmentId
-          ? { ...s, status: "at_warehouse", arrivedAt: new Date().toISOString() }
-          : s,
-      ),
-    })),
+    setSession: async (session) => {
+      set({ session, shipments: [], truckers: [], loading: true });
+      await get().refresh();
+    },
 
-  verifyAndAdmit: (shipmentId, dockNumber, notes) =>
-    set((state) => ({
-      shipments: state.shipments.map((s) =>
-        s.id === shipmentId
-          ? {
-              ...s,
-              status: "verified",
-              verifiedAt: new Date().toISOString(),
-              dockNumber,
-              verificationNotes: notes,
-            }
-          : s,
-      ),
-    })),
+    refresh: async () => {
+      const session = get().session;
+      if (!session) return;
+      try {
+        // Clerks don't get a driver list; they only see a driver after a valid scan.
+        const [shipments, carriers, truckers] = await Promise.all([
+          request<Shipment[]>(session, "/shipments"),
+          request<Carrier[]>(session, "/carriers"),
+          session.role === "clerk" ? Promise.resolve([]) : request<Trucker[]>(session, "/truckers"),
+        ]);
+        // Ignore responses for a role the user has already switched away from.
+        if (get().session !== session) return;
+        set({ shipments, carriers, truckers, loading: false, error: null });
+      } catch (e) {
+        if (get().session !== session) return;
+        set({ loading: false, error: e instanceof Error ? e.message : "Failed to load data" });
+      }
+    },
 
-  releaseForTransit: (shipmentId) =>
-    set((state) => ({
-      shipments: state.shipments.map((s) =>
-        s.id === shipmentId ? { ...s, status: "in_transit" } : s,
-      ),
-    })),
-}));
+    createDriver: (input) => send("POST", "/truckers", input),
+    updateDriver: (id, input) => send("PUT", `/truckers/${id}`, input),
+    createOrder: (input) => send("POST", "/shipments", input),
+    assignShipment: (id, truckerId) => send("POST", `/shipments/${id}/assign`, { truckerId }),
+    reissueCode: (id) => send("POST", `/shipments/${id}/reissue-code`),
+
+    acceptShipment: (id) => send("POST", `/shipments/${id}/accept`),
+    declineShipment: (id) => send("POST", `/shipments/${id}/decline`),
+    markArrived: (id) => send("POST", `/shipments/${id}/arrive`),
+
+    scanPass: (input) => scanDriverPass(input),
+    verifyAndAdmit: async (req) => {
+      await verifyDriverIdentity(req);
+      await get().refresh();
+    },
+    releaseForTransit: (id) => send("POST", `/shipments/${id}/release`),
+  };
+});
+
+/** Log in as a role and poll for updates so changes from other screens show up. */
+export function useRoleSession(role: Role, truckerId?: string, intervalMs = 4000) {
+  const setSession = useAppStore((s) => s.setSession);
+  const refresh = useAppStore((s) => s.refresh);
+
+  useEffect(() => {
+    if (role === "trucker" && !truckerId) return;
+    void setSession({ role, truckerId });
+    const timer = setInterval(() => void refresh(), intervalMs);
+    return () => clearInterval(timer);
+  }, [role, truckerId, intervalMs, setSession, refresh]);
+}

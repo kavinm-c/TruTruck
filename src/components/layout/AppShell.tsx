@@ -2,6 +2,8 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import { Truck, ClipboardCheck, Warehouse } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAppStore } from "@/store/useAppStore";
 
 const NAV_ITEMS = [
   { to: "/coordinator", label: "Logistics Coordinator", icon: ClipboardCheck },
@@ -11,6 +13,7 @@ const NAV_ITEMS = [
 
 export function AppShell() {
   const location = useLocation();
+  const error = useAppStore((s) => s.error);
 
   return (
     <div className="min-h-svh bg-muted/30">
@@ -50,6 +53,12 @@ export function AppShell() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8">
+        {error && (
+          <Alert variant="destructive" className="mb-6">
+            <AlertTitle>Connection problem</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
         <Outlet />
       </main>
 

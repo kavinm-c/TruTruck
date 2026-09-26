@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { PackageSearch } from "lucide-react";
+import { PackagePlus, PackageSearch, Pencil, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -19,13 +19,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -33,117 +26,255 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/shared/StatusBadge";
-import { useAppStore } from "@/store/useAppStore";
-import type { Shipment } from "@/types";
+import { DriverAvatar } from "@/components/shared/DriverAvatar";
+import { DriverDialog } from "@/components/coordinator/DriverDialog";
+import { DriverSelect } from "@/components/coordinator/DriverSelect";
+import { OrderDialog } from "@/components/coordinator/OrderDialog";
+import { formatPickup, shortPlace } from "@/lib/format";
+import { useAppStore, useRoleSession } from "@/store/useAppStore";
+import type { Shipment, Trucker } from "@/types";
 
 export function CoordinatorView() {
+  useRoleSession("coordinator");
   const shipments = useAppStore((s) => s.shipments);
   const carriers = useAppStore((s) => s.carriers);
   const truckers = useAppStore((s) => s.truckers);
   const assignShipment = useAppStore((s) => s.assignShipment);
+  const reissueCode = useAppStore((s) => s.reissueCode);
 
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [driverDialog, setDriverDialog] = useState<{ open: boolean; driver: Trucker | null }>({
+    open: false,
+    driver: null,
+  });
   const [assigning, setAssigning] = useState<Shipment | null>(null);
-  const [carrierId, setCarrierId] = useState<string>("");
-  const [truckerId, setTruckerId] = useState<string>("");
-
-  const availableTruckers = useMemo(
-    () => truckers.filter((t) => t.carrierId === carrierId),
-    [truckers, carrierId],
-  );
+  const [truckerId, setTruckerId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   function openAssignDialog(shipment: Shipment) {
     setAssigning(shipment);
-    setCarrierId(shipment.carrierId ?? "");
     setTruckerId(shipment.truckerId ?? "");
   }
 
-  function confirmAssignment() {
-    if (!assigning || !carrierId || !truckerId) return;
-    assignShipment(assigning.id, carrierId, truckerId);
-    const trucker = truckers.find((t) => t.id === truckerId);
-    const carrier = carriers.find((c) => c.id === carrierId);
-    toast.success(`${assigning.referenceCode} dispatched`, {
-      description: `${trucker?.name} (${carrier?.name}) has been notified.`,
-    });
-    setAssigning(null);
+  async function confirmAssignment() {
+    if (!assigning || !truckerId) return;
+    setSubmitting(true);
+    try {
+      await assignShipment(assigning.id, truckerId);
+      const trucker = truckers.find((t) => t.id === truckerId);
+      toast.success(`${assigning.referenceCode} sent to ${trucker?.name}`, {
+        description: "They'll see the delivery request and can accept it.",
+      });
+      setAssigning(null);
+    } catch (e) {
+      toast.error("Dispatch blocked", { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleReissue(shipment: Shipment) {
+    try {
+      await reissueCode(shipment.id);
+      toast.success(`New pass issued for ${shipment.referenceCode}`, {
+        description: "The driver's app switches to the new pass automatically.",
+      });
+    } catch (e) {
+      toast.error("Could not reissue pass", { description: e instanceof Error ? e.message : String(e) });
+    }
   }
 
   const unassignedCount = shipments.filter((s) => s.status === "unassigned").length;
+  const awaitingCount = shipments.filter((s) => s.status === "assigned").length;
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Shipments</h1>
-        <p className="text-sm text-muted-foreground">
-          {unassignedCount > 0
-            ? `${unassignedCount} shipment${unassignedCount === 1 ? "" : "s"} waiting on a carrier assignment.`
-            : "All shipments have a carrier assigned."}
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dispatch</h1>
+          <p className="text-sm text-muted-foreground">
+            {unassignedCount} order{unassignedCount === 1 ? "" : "s"} need a driver &middot; {awaitingCount} awaiting
+            driver acceptance
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setDriverDialog({ open: true, driver: null })}>
+            <UserPlus className="size-4" />
+            Add driver
+          </Button>
+          <Button onClick={() => setOrderOpen(true)}>
+            <PackagePlus className="size-4" />
+            New delivery order
+          </Button>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">All shipments</CardTitle>
-          <CardDescription>Assign and dispatch a trucker/carrier for pickup.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Shipment</TableHead>
-                <TableHead>Route</TableHead>
-                <TableHead>Pickup</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Carrier / Trucker</TableHead>
-                <TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {shipments.map((shipment) => {
-                const carrier = carriers.find((c) => c.id === shipment.carrierId);
-                const trucker = truckers.find((t) => t.id === shipment.truckerId);
-                return (
-                  <TableRow key={shipment.id}>
-                    <TableCell>
-                      <div className="font-medium">{shipment.referenceCode}</div>
-                      <div className="max-w-56 truncate text-xs text-muted-foreground">
-                        {shipment.what}
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-64 whitespace-normal text-xs text-muted-foreground">
-                      {shipment.origin.split(" - ")[1] ?? shipment.origin} &rarr;{" "}
-                      {shipment.destination}
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      <div>{shipment.pickupDate}</div>
-                      <div className="text-muted-foreground">{shipment.pickupWindow}</div>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={shipment.status} />
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      {trucker ? (
-                        <>
-                          <div className="font-medium text-foreground">{trucker.name}</div>
-                          <div className="text-muted-foreground">{carrier?.name}</div>
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground">Unassigned</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button size="sm" variant={trucker ? "outline" : "default"} onClick={() => openAssignDialog(shipment)}>
-                        {trucker ? "Reassign" : "Assign & dispatch"}
-                      </Button>
-                    </TableCell>
+      <Tabs defaultValue="orders">
+        <TabsList>
+          <TabsTrigger value="orders">Delivery orders ({shipments.length})</TabsTrigger>
+          <TabsTrigger value="drivers">Drivers ({truckers.length})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="orders">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Delivery orders</CardTitle>
+              <CardDescription>Create orders, assign drivers, and track them to the dock.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order</TableHead>
+                    <TableHead>Pickup &rarr; drop-off</TableHead>
+                    <TableHead>Pickup time</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Driver</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                </TableHeader>
+                <TableBody>
+                  {shipments.map((shipment) => {
+                    const trucker = truckers.find((t) => t.id === shipment.truckerId);
+                    const canAssign = ["unassigned", "assigned", "en_route"].includes(shipment.status);
+                    return (
+                      <TableRow key={shipment.id}>
+                        <TableCell>
+                          <div className="font-medium">{shipment.referenceCode}</div>
+                          <div className="max-w-48 truncate text-xs text-muted-foreground">
+                            {shipment.cargo || "—"}
+                          </div>
+                        </TableCell>
+                        <TableCell
+                          className="max-w-64 whitespace-normal text-xs text-muted-foreground"
+                          title={`${shipment.pickupLocation} → ${shipment.dropoffLocation}`}
+                        >
+                          {shortPlace(shipment.pickupLocation)} &rarr; {shortPlace(shipment.dropoffLocation)}
+                        </TableCell>
+                        <TableCell className="text-xs whitespace-nowrap">
+                          {formatPickup(shipment.pickupDate, shipment.pickupTime)}
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge status={shipment.status} />
+                          {shipment.locked && (
+                            <div className="mt-1 text-xs font-medium text-destructive">Pass locked</div>
+                          )}
+                          {shipment.status === "unassigned" && shipment.declinedBy && (
+                            <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                              Declined by {shipment.declinedBy}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {trucker ? (
+                            <div className="flex items-center gap-2">
+                              <DriverAvatar photo={trucker.photo} name={trucker.name} className="size-7 rounded-md" />
+                              <div>
+                                <div className="font-medium text-foreground">{trucker.name}</div>
+                                <div className="text-muted-foreground">{shipment.carrierName}</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">Unassigned</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            {shipment.locked && (
+                              <Button size="sm" variant="destructive" onClick={() => handleReissue(shipment)}>
+                                Reissue pass
+                              </Button>
+                            )}
+                            {canAssign && (
+                              <Button
+                                size="sm"
+                                variant={trucker ? "outline" : "default"}
+                                onClick={() => openAssignDialog(shipment)}
+                              >
+                                {trucker ? "Reassign" : "Assign driver"}
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="drivers">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Drivers</CardTitle>
+              <CardDescription>
+                The receiving clerk sees these details after scanning a driver's pass.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Driver</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>Licence #</TableHead>
+                    <TableHead>Carrier</TableHead>
+                    <TableHead>Vehicle</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {truckers.map((t) => {
+                    const carrier = carriers.find((c) => c.id === t.carrierId);
+                    return (
+                      <TableRow key={t.id}>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <DriverAvatar photo={t.photo} name={t.name} />
+                            <div>
+                              <div className="font-medium">{t.name}</div>
+                              <div className="text-xs text-muted-foreground">{t.email}</div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs">{t.phone}</TableCell>
+                        <TableCell className="font-mono text-xs">{t.licenseNumber}</TableCell>
+                        <TableCell className="text-xs">
+                          {carrier?.name}
+                          {carrier && carrier.cvorStatus !== "active" && (
+                            <div className="font-medium text-destructive">CVOR {carrier.cvorStatus}</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-56 whitespace-normal text-xs">
+                          <div className="font-mono font-medium">{t.vehiclePlate}</div>
+                          <div className="text-muted-foreground">{t.vehicleDescription}</div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button size="sm" variant="ghost" onClick={() => setDriverDialog({ open: true, driver: t })}>
+                            <Pencil className="size-3.5" />
+                            Edit
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      <OrderDialog open={orderOpen} onOpenChange={setOrderOpen} />
+      <DriverDialog
+        open={driverDialog.open}
+        driver={driverDialog.driver}
+        onOpenChange={(open) => setDriverDialog((d) => ({ ...d, open }))}
+      />
 
       <Dialog open={assigning !== null} onOpenChange={(open) => !open && setAssigning(null)}>
         <DialogContent>
@@ -153,56 +284,23 @@ export function CoordinatorView() {
               Assign {assigning?.referenceCode}
             </DialogTitle>
             <DialogDescription>
-              Choose a carrier and trucker. They'll be notified with the pickup details.
+              The driver gets a delivery request to accept. Reassigning cancels the previous driver's pass.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-4">
             <div className="rounded-lg border bg-muted/40 p-3 text-xs">
-              <p><span className="text-muted-foreground">What: </span>{assigning?.what}</p>
-              <p><span className="text-muted-foreground">Where: </span>{assigning?.origin}</p>
+              <p><span className="text-muted-foreground">Pickup: </span>{assigning?.pickupLocation}</p>
+              <p><span className="text-muted-foreground">Drop-off: </span>{assigning?.dropoffLocation}</p>
               <p>
                 <span className="text-muted-foreground">When: </span>
-                {assigning?.pickupDate} &middot; {assigning?.pickupWindow}
+                {assigning && formatPickup(assigning.pickupDate, assigning.pickupTime)}
               </p>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="carrier">Carrier</Label>
-              <Select
-                value={carrierId}
-                onValueChange={(value) => {
-                  setCarrierId(value);
-                  setTruckerId("");
-                }}
-              >
-                <SelectTrigger id="carrier" className="w-full">
-                  <SelectValue placeholder="Select a carrier" />
-                </SelectTrigger>
-                <SelectContent>
-                  {carriers.map((carrier) => (
-                    <SelectItem key={carrier.id} value={carrier.id}>
-                      {carrier.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="trucker">Trucker</Label>
-              <Select value={truckerId} onValueChange={setTruckerId} disabled={!carrierId}>
-                <SelectTrigger id="trucker" className="w-full">
-                  <SelectValue placeholder={carrierId ? "Select a trucker" : "Select a carrier first"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableTruckers.map((trucker) => (
-                    <SelectItem key={trucker.id} value={trucker.id}>
-                      {trucker.name} &middot; {trucker.vehiclePlate}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="assign-driver">Driver</Label>
+              <DriverSelect id="assign-driver" value={truckerId} onChange={setTruckerId} />
             </div>
           </div>
 
@@ -210,8 +308,8 @@ export function CoordinatorView() {
             <Button variant="outline" onClick={() => setAssigning(null)}>
               Cancel
             </Button>
-            <Button disabled={!carrierId || !truckerId} onClick={confirmAssignment}>
-              Dispatch
+            <Button disabled={!truckerId || submitting} onClick={confirmAssignment}>
+              {submitting ? "Sending…" : "Send request"}
             </Button>
           </DialogFooter>
         </DialogContent>

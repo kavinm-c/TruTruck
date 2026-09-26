@@ -8,6 +8,7 @@ import { errorHandler } from "./errors.js";
 import { authRouter } from "./routes/auth.js";
 import { referenceRouter } from "./routes/reference.js";
 import { shipmentsRouter } from "./routes/shipments.js";
+import { truckersRouter } from "./routes/truckers.js";
 import { auditRouter } from "./routes/audit.js";
 
 seed(); // creates tables; loads demo data only if the DB is empty
@@ -15,7 +16,8 @@ seed(); // creates tables; loads demo data only if the DB is empty
 const app = express();
 app.use(helmet());
 app.use(cors({ origin: config.corsOrigin }));
-app.use(express.json({ limit: "50kb" }));
+// Driver photos are sent as resized data URLs, so allow a little headroom.
+app.use(express.json({ limit: "1mb" }));
 app.use(rateLimit({ windowMs: 15 * 60_000, limit: 1000, standardHeaders: "draft-8", legacyHeaders: false }));
 
 app.get("/api/health", (_req, res) => {
@@ -23,6 +25,7 @@ app.get("/api/health", (_req, res) => {
 });
 app.use("/api/auth", authRouter);
 app.use("/api/shipments", shipmentsRouter);
+app.use("/api/truckers", truckersRouter);
 app.use("/api/audit", auditRouter);
 app.use("/api", referenceRouter);
 app.use((_req, res) => {
