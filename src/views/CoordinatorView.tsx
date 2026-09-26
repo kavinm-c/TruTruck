@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   CircleCheck,
+  Ellipsis,
   Flag,
   Info,
   MapPin,
@@ -14,6 +15,7 @@ import {
   PackageSearch,
   Pencil,
   UserPlus,
+  UserRoundPen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -344,8 +346,8 @@ export function CoordinatorView() {
                     return (
                       <TableRow key={shipment.id}>
                         <TableCell>
-                          <div className="font-medium">{shipment.referenceCode}</div>
-                          <div className="max-w-48 truncate text-xs text-muted-foreground">
+                          <div className="text-base font-medium">{shipment.referenceCode}</div>
+                          <div className="max-w-56 truncate text-muted-foreground">
                             {shipment.cargo || "—"}
                           </div>
                           <Button
@@ -363,43 +365,43 @@ export function CoordinatorView() {
                           <StatusBadge status={shipment.status} />
                           {shipment.locked && (
                             <div className="mt-1 flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-medium text-destructive">Pass locked</span>
+                              <span className="text-sm font-medium text-destructive">Pass locked</span>
                               <Button size="xs" variant="destructive" onClick={() => handleReissue(shipment)}>
                                 Reissue pass
                               </Button>
                             </div>
                           )}
                           {shipment.status === "verified" && (
-                            <div className="mt-1 flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
-                              <CircleCheck className="size-3.5 shrink-0" />
+                            <div className="mt-1 flex items-center gap-1 text-sm text-emerald-700 dark:text-emerald-400">
+                              <CircleCheck className="size-4 shrink-0" />
                               Verified by receiving clerk
                               {shipment.dockNumber && ` · ${shipment.dockNumber}`}
                               {shipment.verifiedAt && ` · ${formatStamp(shipment.verifiedAt)}`}
                             </div>
                           )}
                           {shipment.status === "in_transit" && shipment.verifiedAt && (
-                            <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                              <CircleCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                            <div className="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+                              <CircleCheck className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                               Clerk verified {formatStamp(shipment.verifiedAt)}
                             </div>
                           )}
                           {shipment.status === "cancelled" && (
-                            <div className="mt-1 max-w-48 text-xs text-muted-foreground">
+                            <div className="mt-1 max-w-56 text-sm text-muted-foreground">
                               Revoked{shipment.cancelledAt && ` ${formatStamp(shipment.cancelledAt)}`}
                               {shipment.cancelReason && ` · ${shipment.cancelReason}`}
                             </div>
                           )}
                           {shipment.status === "unassigned" && shipment.declinedBy && (
-                            <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                            <div className="mt-1 text-sm text-amber-700 dark:text-amber-400">
                               Declined by {shipment.declinedBy}
                             </div>
                           )}
                         </TableCell>
-                        <TableCell className="text-xs">
+                        <TableCell>
                           <div className="flex items-center justify-between gap-3">
                             {driver ? (
-                              <div className="flex items-center gap-2">
-                                <DriverAvatar photo={driver.photo} name={driver.name} className="size-7 rounded-md" />
+                              <div className="flex items-center gap-2.5">
+                                <DriverAvatar photo={driver.photo} name={driver.name} className="size-9 rounded-md" />
                                 <div>
                                   <div className="font-medium text-foreground">{driver.name}</div>
                                   <div className="text-muted-foreground">{shipment.carrierName}</div>
@@ -413,25 +415,37 @@ export function CoordinatorView() {
                               <span className="text-muted-foreground">Unassigned</span>
                             )}
 
-                            <div className="flex shrink-0 items-center gap-1">
-                              {driver && canAssign && (
-                                <Button size="xs" variant="outline" onClick={() => openAssignDialog(shipment)}>
-                                  Reassign
-                                </Button>
-                              )}
-                              {canRevoke && (
-                                <Button
-                                  size="icon-xs"
-                                  variant="ghost"
-                                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                  title="Revoke order"
-                                  aria-label={`Revoke ${shipment.referenceCode}`}
-                                  onClick={() => openRevokeDialog(shipment)}
-                                >
-                                  <Ban />
-                                </Button>
-                              )}
-                            </div>
+                            {((driver && canAssign) || canRevoke) && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    size="icon-sm"
+                                    variant="ghost"
+                                    className="shrink-0 text-muted-foreground"
+                                    aria-label={`More options for ${shipment.referenceCode}`}
+                                  >
+                                    <Ellipsis />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="min-w-40">
+                                  {driver && canAssign && (
+                                    <DropdownMenuItem onSelect={() => openAssignDialog(shipment)}>
+                                      <UserRoundPen />
+                                      Reassign driver
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canRevoke && (
+                                    <DropdownMenuItem
+                                      className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                                      onSelect={() => openRevokeDialog(shipment)}
+                                    >
+                                      <Ban />
+                                      Revoke order
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
