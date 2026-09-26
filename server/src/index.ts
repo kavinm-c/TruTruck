@@ -33,6 +33,8 @@ app.use((_req, res) => {
 });
 app.use(errorHandler);
 
-app.listen(config.port, () => {
+// Express 5 passes listen errors (e.g. port already in use) to this callback.
+app.listen(config.port, (err?: Error) => {
+  if (err) throw err;
   console.log(`TruTruck API listening on http://localhost:${config.port}/api`);
 });
