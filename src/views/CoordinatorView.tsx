@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import {
   Ban,
   CalendarClock,
+  Check,
+  ChevronDown,
   CircleCheck,
   Flag,
   Info,
@@ -29,6 +31,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -47,6 +56,7 @@ import { DriverSelect } from "@/components/coordinator/DriverSelect";
 import { OrderDialog } from "@/components/coordinator/OrderDialog";
 import { Dashboard } from "@/components/coordinator/Dashboard";
 import { formatPickup, formatStamp } from "@/lib/format";
+import { STATUS_GROUPS, statusGroup, type StatusGroup } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { useAppStore, useRoleSession } from "@/store/useAppStore";
 import {
@@ -57,6 +67,41 @@ import {
   type Shipment,
   type ShipmentStatus,
 } from "@/types";
+
+type StatusFilter = "all" | StatusGroup | ShipmentStatus;
+
+function CountPill({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-1.5 text-[0.7rem] tabular-nums",
+        active ? "bg-white/25" : "bg-foreground/10",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function FilterItem({
+  selected,
+  count,
+  onSelect,
+  children,
+}: {
+  selected: boolean;
+  count: number;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <DropdownMenuItem onSelect={onSelect} className={cn(selected && "font-medium")}>
+      <Check className={cn("size-3.5", !selected && "invisible")} aria-hidden />
+      {children}
+      <span className="ml-auto pl-4 text-xs text-muted-foreground tabular-nums">{count}</span>
+    </DropdownMenuItem>
+  );
+}
 
 function InfoRow({
   icon: Icon,
@@ -87,17 +132,26 @@ export function CoordinatorView() {
   const reissueCode = useAppStore((s) => s.reissueCode);
   const revokeShipment = useAppStore((s) => s.revokeShipment);
 
-  // Status filter lives in the URL (?status=verified) so it survives refreshes.
+  // Status filter lives in the URL (?status=pending or ?status=verified) so it survives refreshes.
+  // It's either everything, one overall stage, or one exact status within a stage.
   const [searchParams, setSearchParams] = useSearchParams();
   const statusParam = searchParams.get("status");
-  const statusFilter: ShipmentStatus | "all" = SHIPMENT_STATUSES.includes(statusParam as ShipmentStatus)
-    ? (statusParam as ShipmentStatus)
-    : "all";
-  function setStatusFilter(status: ShipmentStatus | "all") {
+  const statusFilter: StatusFilter =
+    SHIPMENT_STATUSES.includes(statusParam as ShipmentStatus) ||
+    STATUS_GROUPS.some((g) => g.id === statusParam)
+      ? (statusParam as StatusFilter)
+      : "all";
+  function setStatusFilter(status: StatusFilter) {
     setSearchParams(status === "all" ? {} : { status }, { replace: true });
   }
-  const visibleShipments =
-    statusFilter === "all" ? shipments : shipments.filter((s) => s.status === statusFilter);
+  const matchesFilter = (s: Shipment, filter: StatusFilter) =>
+    filter === "all" || s.status === filter || statusGroup(s.status).id === filter;
+  const countFor = (filter: StatusFilter) => shipments.filter((s) => matchesFilter(s, filter)).length;
+  const visibleShipments = shipments.filter((s) => matchesFilter(s, statusFilter));
+  const filterLabel =
+    statusFilter === "all"
+      ? ""
+      : (STATUS_GROUPS.find((g) => g.id === statusFilter)?.label ?? SHIPMENT_STATUS_LABEL[statusFilter as ShipmentStatus]);
 
   const [orderOpen, setOrderOpen] = useState(false);
   const [driverDialog, setDriverDialog] = useState<{ open: boolean; driver: Driver | null }>({
@@ -212,28 +266,57 @@ export function CoordinatorView() {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="flex flex-wrap gap-2" role="group" aria-label="Filter orders by status">
-                {(["all", ...SHIPMENT_STATUSES] as const).map((status) => {
-                  const count =
-                    status === "all" ? shipments.length : shipments.filter((s) => s.status === status).length;
-                  const active = statusFilter === status;
+                <Button
+                  size="sm"
+                  variant={statusFilter === "all" ? "default" : "outline"}
+                  aria-pressed={statusFilter === "all"}
+                  onClick={() => setStatusFilter("all")}
+                >
+                  All
+                  <CountPill active={statusFilter === "all"}>{shipments.length}</CountPill>
+                </Button>
+
+                {STATUS_GROUPS.map((group) => {
+                  const exact = group.statuses.find((s) => s === statusFilter);
+                  const active = statusFilter === group.id || exact !== undefined;
                   return (
-                    <Button
-                      key={status}
-                      size="sm"
-                      variant={active ? "default" : "outline"}
-                      aria-pressed={active}
-                      onClick={() => setStatusFilter(status)}
-                    >
-                      {status === "all" ? "All" : SHIPMENT_STATUS_LABEL[status]}
-                      <span
-                        className={cn(
-                          "rounded-full px-1.5 text-[0.7rem] tabular-nums",
-                          active ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground",
-                        )}
-                      >
-                        {count}
-                      </span>
-                    </Button>
+                    <DropdownMenu key={group.id}>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-pressed={active}
+                          className={active ? group.solid : group.soft}
+                        >
+                          {!active && <span className={cn("size-2 rounded-full", group.dot)} aria-hidden />}
+                          {group.label}
+                          {exact && `: ${SHIPMENT_STATUS_LABEL[exact]}`}
+                          <CountPill active={active}>{countFor(exact ?? group.id)}</CountPill>
+                          <ChevronDown className="size-3.5 opacity-70" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <FilterItem
+                          selected={statusFilter === group.id}
+                          count={countFor(group.id)}
+                          onSelect={() => setStatusFilter(group.id)}
+                        >
+                          All {group.label.toLowerCase()}
+                        </FilterItem>
+                        <DropdownMenuSeparator />
+                        {group.statuses.map((status) => (
+                          <FilterItem
+                            key={status}
+                            selected={statusFilter === status}
+                            count={countFor(status)}
+                            onSelect={() => setStatusFilter(status)}
+                          >
+                            <span className={cn("size-2 rounded-full", group.dot)} aria-hidden />
+                            {SHIPMENT_STATUS_LABEL[status]}
+                          </FilterItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   );
                 })}
               </div>
@@ -250,8 +333,7 @@ export function CoordinatorView() {
                   {visibleShipments.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={3} className="py-8 text-center text-muted-foreground">
-                        No {statusFilter === "all" ? "" : `${SHIPMENT_STATUS_LABEL[statusFilter].toLowerCase()} `}
-                        orders.
+                        No {filterLabel && `${filterLabel.toLowerCase()} `}orders.
                       </TableCell>
                     </TableRow>
                   )}
