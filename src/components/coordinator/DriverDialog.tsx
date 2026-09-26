@@ -22,7 +22,7 @@ import {
 import { DriverAvatar } from "@/components/shared/DriverAvatar";
 import { photoToDataUrl } from "@/lib/image";
 import { useAppStore } from "@/store/useAppStore";
-import type { DriverInput, Trucker } from "@/types";
+import type { DriverInput, Driver } from "@/types";
 
 const EMPTY: DriverInput = {
   name: "",
@@ -42,7 +42,7 @@ export function DriverDialog({
   onOpenChange,
 }: {
   open: boolean;
-  driver?: Trucker | null;
+  driver?: Driver | null;
   onOpenChange: (open: boolean) => void;
 }) {
   return (
@@ -55,7 +55,7 @@ export function DriverDialog({
   );
 }
 
-function DriverForm({ driver, onDone }: { driver: Trucker | null; onDone: () => void }) {
+function DriverForm({ driver, onDone }: { driver: Driver | null; onDone: () => void }) {
   const carriers = useAppStore((s) => s.carriers);
   const createDriver = useAppStore((s) => s.createDriver);
   const updateDriver = useAppStore((s) => s.updateDriver);

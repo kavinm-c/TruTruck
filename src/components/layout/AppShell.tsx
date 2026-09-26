@@ -7,7 +7,7 @@ import { useAppStore } from "@/store/useAppStore";
 
 const NAV_ITEMS = [
   { to: "/coordinator", label: "Logistics Coordinator", icon: ClipboardCheck },
-  { to: "/trucker", label: "Trucker", icon: Truck },
+  { to: "/driver", label: "Driver", icon: Truck },
   { to: "/clerk", label: "Receiving Clerk", icon: Warehouse },
 ];
 

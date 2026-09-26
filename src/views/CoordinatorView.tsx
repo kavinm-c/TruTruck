@@ -34,37 +34,37 @@ import { DriverSelect } from "@/components/coordinator/DriverSelect";
 import { OrderDialog } from "@/components/coordinator/OrderDialog";
 import { formatPickup, shortPlace } from "@/lib/format";
 import { useAppStore, useRoleSession } from "@/store/useAppStore";
-import type { Shipment, Trucker } from "@/types";
+import type { Shipment, Driver } from "@/types";
 
 export function CoordinatorView() {
   useRoleSession("coordinator");
   const shipments = useAppStore((s) => s.shipments);
   const carriers = useAppStore((s) => s.carriers);
-  const truckers = useAppStore((s) => s.truckers);
+  const drivers = useAppStore((s) => s.drivers);
   const assignShipment = useAppStore((s) => s.assignShipment);
   const reissueCode = useAppStore((s) => s.reissueCode);
 
   const [orderOpen, setOrderOpen] = useState(false);
-  const [driverDialog, setDriverDialog] = useState<{ open: boolean; driver: Trucker | null }>({
+  const [driverDialog, setDriverDialog] = useState<{ open: boolean; driver: Driver | null }>({
     open: false,
     driver: null,
   });
   const [assigning, setAssigning] = useState<Shipment | null>(null);
-  const [truckerId, setTruckerId] = useState("");
+  const [driverId, setDriverId] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   function openAssignDialog(shipment: Shipment) {
     setAssigning(shipment);
-    setTruckerId(shipment.truckerId ?? "");
+    setDriverId(shipment.driverId ?? "");
   }
 
   async function confirmAssignment() {
-    if (!assigning || !truckerId) return;
+    if (!assigning || !driverId) return;
     setSubmitting(true);
     try {
-      await assignShipment(assigning.id, truckerId);
-      const trucker = truckers.find((t) => t.id === truckerId);
-      toast.success(`${assigning.referenceCode} sent to ${trucker?.name}`, {
+      await assignShipment(assigning.id, driverId);
+      const driver = drivers.find((d) => d.id === driverId);
+      toast.success(`${assigning.referenceCode} sent to ${driver?.name}`, {
         description: "They'll see the delivery request and can accept it.",
       });
       setAssigning(null);
@@ -114,7 +114,7 @@ export function CoordinatorView() {
       <Tabs defaultValue="orders">
         <TabsList>
           <TabsTrigger value="orders">Delivery orders ({shipments.length})</TabsTrigger>
-          <TabsTrigger value="drivers">Drivers ({truckers.length})</TabsTrigger>
+          <TabsTrigger value="drivers">Drivers ({drivers.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orders">
@@ -137,7 +137,7 @@ export function CoordinatorView() {
                 </TableHeader>
                 <TableBody>
                   {shipments.map((shipment) => {
-                    const trucker = truckers.find((t) => t.id === shipment.truckerId);
+                    const driver = drivers.find((d) => d.id === shipment.driverId);
                     const canAssign = ["unassigned", "assigned", "en_route"].includes(shipment.status);
                     return (
                       <TableRow key={shipment.id}>
@@ -168,11 +168,11 @@ export function CoordinatorView() {
                           )}
                         </TableCell>
                         <TableCell className="text-xs">
-                          {trucker ? (
+                          {driver ? (
                             <div className="flex items-center gap-2">
-                              <DriverAvatar photo={trucker.photo} name={trucker.name} className="size-7 rounded-md" />
+                              <DriverAvatar photo={driver.photo} name={driver.name} className="size-7 rounded-md" />
                               <div>
-                                <div className="font-medium text-foreground">{trucker.name}</div>
+                                <div className="font-medium text-foreground">{driver.name}</div>
                                 <div className="text-muted-foreground">{shipment.carrierName}</div>
                               </div>
                             </div>
@@ -190,10 +190,10 @@ export function CoordinatorView() {
                             {canAssign && (
                               <Button
                                 size="sm"
-                                variant={trucker ? "outline" : "default"}
+                                variant={driver ? "outline" : "default"}
                                 onClick={() => openAssignDialog(shipment)}
                               >
-                                {trucker ? "Reassign" : "Assign driver"}
+                                {driver ? "Reassign" : "Assign driver"}
                               </Button>
                             )}
                           </div>
@@ -228,21 +228,21 @@ export function CoordinatorView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {truckers.map((t) => {
-                    const carrier = carriers.find((c) => c.id === t.carrierId);
+                  {drivers.map((d) => {
+                    const carrier = carriers.find((c) => c.id === d.carrierId);
                     return (
-                      <TableRow key={t.id}>
+                      <TableRow key={d.id}>
                         <TableCell>
                           <div className="flex items-center gap-3">
-                            <DriverAvatar photo={t.photo} name={t.name} />
+                            <DriverAvatar photo={d.photo} name={d.name} />
                             <div>
-                              <div className="font-medium">{t.name}</div>
-                              <div className="text-xs text-muted-foreground">{t.email}</div>
+                              <div className="font-medium">{d.name}</div>
+                              <div className="text-xs text-muted-foreground">{d.email}</div>
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="text-xs">{t.phone}</TableCell>
-                        <TableCell className="font-mono text-xs">{t.licenseNumber}</TableCell>
+                        <TableCell className="text-xs">{d.phone}</TableCell>
+                        <TableCell className="font-mono text-xs">{d.licenseNumber}</TableCell>
                         <TableCell className="text-xs">
                           {carrier?.name}
                           {carrier && carrier.cvorStatus !== "active" && (
@@ -250,11 +250,11 @@ export function CoordinatorView() {
                           )}
                         </TableCell>
                         <TableCell className="max-w-56 whitespace-normal text-xs">
-                          <div className="font-mono font-medium">{t.vehiclePlate}</div>
-                          <div className="text-muted-foreground">{t.vehicleDescription}</div>
+                          <div className="font-mono font-medium">{d.vehiclePlate}</div>
+                          <div className="text-muted-foreground">{d.vehicleDescription}</div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button size="sm" variant="ghost" onClick={() => setDriverDialog({ open: true, driver: t })}>
+                          <Button size="sm" variant="ghost" onClick={() => setDriverDialog({ open: true, driver: d })}>
                             <Pencil className="size-3.5" />
                             Edit
                           </Button>
@@ -300,7 +300,7 @@ export function CoordinatorView() {
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="assign-driver">Driver</Label>
-              <DriverSelect id="assign-driver" value={truckerId} onChange={setTruckerId} />
+              <DriverSelect id="assign-driver" value={driverId} onChange={setDriverId} />
             </div>
           </div>
 
@@ -308,7 +308,7 @@ export function CoordinatorView() {
             <Button variant="outline" onClick={() => setAssigning(null)}>
               Cancel
             </Button>
-            <Button disabled={!truckerId || submitting} onClick={confirmAssignment}>
+            <Button disabled={!driverId || submitting} onClick={confirmAssignment}>
               {submitting ? "Sending…" : "Send request"}
             </Button>
           </DialogFooter>

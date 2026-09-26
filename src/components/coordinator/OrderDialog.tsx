@@ -25,7 +25,7 @@ const EMPTY = {
   dropoffLocation: "",
   pickupDate: "",
   pickupTime: "09:00",
-  truckerId: NO_DRIVER,
+  driverId: NO_DRIVER,
 };
 
 export function OrderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -41,7 +41,7 @@ export function OrderDialog({ open, onOpenChange }: { open: boolean; onOpenChang
 
 function OrderForm({ onDone }: { onDone: () => void }) {
   const createOrder = useAppStore((s) => s.createOrder);
-  const truckers = useAppStore((s) => s.truckers);
+  const drivers = useAppStore((s) => s.drivers);
   const [form, setForm] = useState(() => ({ ...EMPTY, pickupDate: today() }));
   const [submitting, setSubmitting] = useState(false);
 
@@ -51,9 +51,9 @@ function OrderForm({ onDone }: { onDone: () => void }) {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const { truckerId, ...rest } = form;
-      const order = await createOrder({ ...rest, truckerId: truckerId === NO_DRIVER ? undefined : truckerId });
-      const driver = truckers.find((t) => t.id === order.truckerId);
+      const { driverId, ...rest } = form;
+      const order = await createOrder({ ...rest, driverId: driverId === NO_DRIVER ? undefined : driverId });
+      const driver = drivers.find((d) => d.id === order.driverId);
       toast.success(`${order.referenceCode} created`, {
         description: driver
           ? `Delivery request sent to ${driver.name}. Their pass unlocks once they accept.`
@@ -61,7 +61,7 @@ function OrderForm({ onDone }: { onDone: () => void }) {
       });
       onDone();
     } catch (err) {
-      toast.error("Couldn't create order", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Couldn'd create order", { description: err instanceof Error ? err.message : String(err) });
     } finally {
       setSubmitting(false);
     }
@@ -130,7 +130,7 @@ function OrderForm({ onDone }: { onDone: () => void }) {
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="order-driver">Driver</Label>
-        <DriverSelect id="order-driver" allowNone value={form.truckerId} onChange={(v) => set("truckerId", v)} />
+        <DriverSelect id="order-driver" allowNone value={form.driverId} onChange={(v) => set("driverId", v)} />
       </div>
 
       <DialogFooter>
@@ -138,7 +138,7 @@ function OrderForm({ onDone }: { onDone: () => void }) {
           Cancel
         </Button>
         <Button type="submit" disabled={submitting}>
-          {submitting ? "Creating…" : form.truckerId === NO_DRIVER ? "Create order" : "Create & send to driver"}
+          {submitting ? "Creating…" : form.driverId === NO_DRIVER ? "Create order" : "Create & send to driver"}
         </Button>
       </DialogFooter>
     </form>

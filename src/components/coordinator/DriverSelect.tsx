@@ -18,10 +18,10 @@ export function DriverSelect({
 }: {
   id: string;
   value: string;
-  onChange: (truckerId: string) => void;
+  onChange: (driverId: string) => void;
   allowNone?: boolean;
 }) {
-  const truckers = useAppStore((s) => s.truckers);
+  const drivers = useAppStore((s) => s.drivers);
   const carriers = useAppStore((s) => s.carriers);
 
   return (
@@ -31,12 +31,12 @@ export function DriverSelect({
       </SelectTrigger>
       <SelectContent>
         {allowNone && <SelectItem value={NO_DRIVER}>Assign later</SelectItem>}
-        {truckers.map((t) => {
-          const carrier = carriers.find((c) => c.id === t.carrierId);
+        {drivers.map((d) => {
+          const carrier = carriers.find((c) => c.id === d.carrierId);
           const blocked = carrier && carrier.cvorStatus !== "active";
           return (
-            <SelectItem key={t.id} value={t.id}>
-              {t.name} &middot; {carrier?.name ?? "No carrier"}
+            <SelectItem key={d.id} value={d.id}>
+              {d.name} &middot; {carrier?.name ?? "No carrier"}
               {blocked && <span className="text-destructive"> (CVOR {carrier.cvorStatus})</span>}
             </SelectItem>
           );

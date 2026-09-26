@@ -1,4 +1,4 @@
-import type { Shipment, Trucker } from "@/types";
+import type { Shipment, Driver } from "@/types";
 
 /**
  * Payload encoded in the driver's QR code. Must stay in sync with
@@ -13,7 +13,7 @@ export interface DriverPass {
   driver: { id: string; name: string; phone: string; email: string; license: string; plate: string };
 }
 
-export function buildPass(shipment: Shipment, driver: Trucker, code: string): string {
+export function buildPass(shipment: Shipment, driver: Driver, code: string): string {
   const pass: DriverPass = {
     t: "trutruck-pass",
     v: 1,

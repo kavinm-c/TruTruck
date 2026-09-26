@@ -1,4 +1,4 @@
-export type Role = "coordinator" | "trucker" | "clerk";
+export type Role = "coordinator" | "driver" | "clerk";
 
 export type ShipmentStatus =
   | "unassigned"
@@ -16,7 +16,7 @@ export interface Carrier {
   cvorStatus: "active" | "expired" | "suspended";
 }
 
-export interface Trucker {
+export interface Driver {
   id: string;
   name: string;
   phone: string;
@@ -29,7 +29,7 @@ export interface Trucker {
   vehicleDescription: string;
 }
 
-export type DriverInput = Omit<Trucker, "id">;
+export type DriverInput = Omit<Driver, "id">;
 
 export interface Shipment {
   id: string;
@@ -44,7 +44,7 @@ export interface Shipment {
   status: ShipmentStatus;
   carrierId?: string;
   carrierName?: string;
-  truckerId?: string;
+  driverId?: string;
   driverName?: string;
   /** Base32 TOTP secret. Only sent to the assigned driver after they accept. */
   totpSecret?: string;
@@ -67,14 +67,14 @@ export interface OrderInput {
   dropoffLocation: string;
   pickupDate: string;
   pickupTime: string;
-  truckerId?: string;
+  driverId?: string;
 }
 
 /** What the clerk gets back after a valid QR / code scan. */
 export interface ScanResult {
   via: "qr" | "code";
   shipment: Shipment;
-  driver: Trucker;
+  driver: Driver;
   carrier: Carrier;
   /** Short-lived server ticket that authorises the final verify step. */
   ticket: string;

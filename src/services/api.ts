@@ -4,7 +4,7 @@ const BASE_URL: string = import.meta.env.VITE_API_URL ?? "http://localhost:4000/
 
 export interface Session {
   role: Role;
-  truckerId?: string;
+  driverId?: string;
 }
 
 export class ApiError extends Error {
@@ -22,7 +22,7 @@ export class ApiError extends Error {
 }
 
 const tokens = new Map<string, string>();
-const sessionKey = (s: Session) => `${s.role}:${s.truckerId ?? ""}`;
+const sessionKey = (s: Session) => `${s.role}:${s.driverId ?? ""}`;
 
 async function login(session: Session): Promise<string> {
   const res = await fetch(`${BASE_URL}/auth/demo-login`, {
@@ -77,9 +77,9 @@ export async function request<T>(
   return data as T;
 }
 
-export async function getDemoTruckers(): Promise<{ id: string; name: string }[]> {
+export async function getDemoDrivers(): Promise<{ id: string; name: string }[]> {
   const res = await fetch(`${BASE_URL}/auth/demo-users`);
   if (!res.ok) throw new ApiError(res.status, "Could not load demo users");
   const data = await res.json();
-  return data.truckers;
+  return data.drivers;
 }

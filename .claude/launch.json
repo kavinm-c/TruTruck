@@ -4,7 +4,7 @@
     {
       "name": "api",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "TruTruck-main/server", "run", "dev"],
+      "runtimeArgs": ["--prefix", "server", "run", "dev"],
       "port": 4000
     },
     {
