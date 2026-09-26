@@ -16,6 +16,8 @@ await seed(); // creates tables; loads demo data only if the DB is empty
 await warnIfMigrationPending();
 
 const app = express();
+// Hosts like Render sit behind one proxy; trust it so rate limits apply per client IP.
+app.set("trust proxy", 1);
 app.use(helmet());
 app.use(cors({ origin: config.corsOrigin }));
 // Driver photos are sent as resized data URLs, so allow a little headroom.
