@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Ban,
@@ -64,7 +63,6 @@ import { useAppStore, useRoleSession } from "@/store/useAppStore";
 import {
   REVOCABLE_STATUSES,
   SHIPMENT_STATUS_LABEL,
-  SHIPMENT_STATUSES,
   type Driver,
   type Shipment,
   type ShipmentStatus,
@@ -134,18 +132,9 @@ export function CoordinatorView() {
   const reissueCode = useAppStore((s) => s.reissueCode);
   const revokeShipment = useAppStore((s) => s.revokeShipment);
 
-  // Status filter lives in the URL (?status=pending or ?status=verified) so it survives refreshes.
-  // It's either everything, one overall stage, or one exact status within a stage.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const statusParam = searchParams.get("status");
-  const statusFilter: StatusFilter =
-    SHIPMENT_STATUSES.includes(statusParam as ShipmentStatus) ||
-    STATUS_GROUPS.some((g) => g.id === statusParam)
-      ? (statusParam as StatusFilter)
-      : "all";
-  function setStatusFilter(status: StatusFilter) {
-    setSearchParams(status === "all" ? {} : { status }, { replace: true });
-  }
+  // Everything, one overall stage, or one exact status within a stage. Every page load opens on
+  // unassigned orders, since those are the ones waiting on the coordinator.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("unassigned");
   const matchesFilter = (s: Shipment, filter: StatusFilter) =>
     filter === "all" || s.status === filter || statusGroup(s.status).id === filter;
   const countFor = (filter: StatusFilter) => shipments.filter((s) => matchesFilter(s, filter)).length;
