@@ -1,7 +1,18 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Ban, CircleCheck, PackagePlus, PackageSearch, Pencil, UserPlus } from "lucide-react";
+import {
+  Ban,
+  CalendarClock,
+  CircleCheck,
+  Flag,
+  Info,
+  MapPin,
+  PackagePlus,
+  PackageSearch,
+  Pencil,
+  UserPlus,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -35,7 +46,7 @@ import { DriverDialog } from "@/components/coordinator/DriverDialog";
 import { DriverSelect } from "@/components/coordinator/DriverSelect";
 import { OrderDialog } from "@/components/coordinator/OrderDialog";
 import { Dashboard } from "@/components/coordinator/Dashboard";
-import { formatPickup, formatStamp, shortPlace } from "@/lib/format";
+import { formatPickup, formatStamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useAppStore, useRoleSession } from "@/store/useAppStore";
 import {
@@ -46,6 +57,26 @@ import {
   type Shipment,
   type ShipmentStatus,
 } from "@/types";
+
+function InfoRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof MapPin;
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <div>
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div>{value || "—"}</div>
+      </div>
+    </div>
+  );
+}
 
 export function CoordinatorView() {
   useRoleSession("coordinator");
@@ -77,6 +108,7 @@ export function CoordinatorView() {
   const [driverId, setDriverId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [revoking, setRevoking] = useState<Shipment | null>(null);
+  const [viewing, setViewing] = useState<Shipment | null>(null);
   const [revokeReason, setRevokeReason] = useState("");
 
   function openAssignDialog(shipment: Shipment) {
@@ -210,8 +242,6 @@ export function CoordinatorView() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Order</TableHead>
-                    <TableHead>Pickup &rarr; drop-off</TableHead>
-                    <TableHead>Pickup time</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Driver</TableHead>
                     <TableHead className="text-right">Action</TableHead>
@@ -220,7 +250,7 @@ export function CoordinatorView() {
                 <TableBody>
                   {visibleShipments.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                      <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
                         No {statusFilter === "all" ? "" : `${SHIPMENT_STATUS_LABEL[statusFilter].toLowerCase()} `}
                         orders.
                       </TableCell>
@@ -237,15 +267,16 @@ export function CoordinatorView() {
                           <div className="max-w-48 truncate text-xs text-muted-foreground">
                             {shipment.cargo || "—"}
                           </div>
-                        </TableCell>
-                        <TableCell
-                          className="max-w-64 whitespace-normal text-xs text-muted-foreground"
-                          title={`${shipment.pickupLocation} → ${shipment.dropoffLocation}`}
-                        >
-                          {shortPlace(shipment.pickupLocation)} &rarr; {shortPlace(shipment.dropoffLocation)}
-                        </TableCell>
-                        <TableCell className="text-xs whitespace-nowrap">
-                          {formatPickup(shipment.pickupDate, shipment.pickupTime)}
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            className="mt-1.5"
+                            aria-label={`Pickup and drop-off details for ${shipment.referenceCode}`}
+                            onClick={() => setViewing(shipment)}
+                          >
+                            <Info />
+                            Info
+                          </Button>
                         </TableCell>
                         <TableCell>
                           <StatusBadge status={shipment.status} />
@@ -401,6 +432,34 @@ export function CoordinatorView() {
         driver={driverDialog.driver}
         onOpenChange={(open) => setDriverDialog((d) => ({ ...d, open }))}
       />
+
+      <Dialog open={viewing !== null} onOpenChange={(open) => !open && setViewing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Info className="size-4" />
+              {viewing?.referenceCode}
+            </DialogTitle>
+            <DialogDescription>{viewing?.cargo || "No cargo description"}</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-3 text-sm">
+            <InfoRow icon={MapPin} label="Pickup" value={viewing?.pickupLocation} />
+            <InfoRow icon={Flag} label="Drop-off" value={viewing?.dropoffLocation} />
+            <InfoRow
+              icon={CalendarClock}
+              label="Pickup time"
+              value={viewing && formatPickup(viewing.pickupDate, viewing.pickupTime)}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewing(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={revoking !== null} onOpenChange={(open) => !open && setRevoking(null)}>
         <DialogContent>

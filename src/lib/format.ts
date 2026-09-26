@@ -9,12 +9,6 @@ export function formatPickup(date: string, time: string): string {
   return `${day} · ${clock}`;
 }
 
-/** "Warehouse 4 - 8 Industrial Pkwy, Brampton, ON" -> "Brampton, ON" */
-export function shortPlace(location: string): string {
-  const parts = location.split(",").map((p) => p.trim());
-  return parts.length >= 2 ? parts.slice(-2).join(", ") : location;
-}
-
 export function timeAgo(iso: string): string {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
   if (minutes < 1) return "just now";
